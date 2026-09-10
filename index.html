@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>IA Vision</title>
+
+    <style>
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+
+            width: 100%;
+            height: 100%;
+
+            overflow: hidden;
+
+            background: #000;
+        }
+
+        #pantalla {
+
+            position: fixed;
+
+            inset: 0;
+
+            width: 100vw;
+            height: 100vh;
+
+            background: #000;
+
+            object-fit: cover;
+        }
+
+    </style>
+
+</head>
+
+
+<body>
+
+    <!--
+        SOLO SE MUESTRA ESTE VIDEO.
+        No hay botones ni elementos encima.
+    -->
+
+    <video
+        id="pantalla"
+        autoplay
+        muted
+        playsinline
+    ></video>
+
+
+    <script>
+
+        const video = document.getElementById("pantalla");
+
+        const VIDEO_ESPERANDO = "/static/esperando.mp4";
+        const VIDEO_HABLANDO = "/static/hablando.mp4";
+
+        let estadoAnterior = null;
+
+
+        // ------------------------------------------------
+        // Cambiar video
+        // ------------------------------------------------
+
+        function cambiarVideo(estado) {
+
+            let nuevoVideo;
+
+            if (estado === "hablando") {
+
+                nuevoVideo = VIDEO_HABLANDO;
+
+            } else {
+
+                nuevoVideo = VIDEO_ESPERANDO;
+
+            }
+
+
+            // No recargar el video si ya es el correcto
+            if (
+                estadoAnterior === estado &&
+                video.src.endsWith(nuevoVideo)
+            ) {
+
+                return;
+            }
+
+
+            estadoAnterior = estado;
+
+
+            video.src = nuevoVideo;
+
+            video.loop = true;
+
+            video.muted = true;
+
+            video.autoplay = true;
+
+            video.playsInline = true;
+
+
+            video.load();
+
+            video.play().catch(error => {
+
+                console.log(
+                    "El navegador bloqueó autoplay:",
+                    error
+                );
+
+            });
+
+        }
+
+
+        // ------------------------------------------------
+        // Consultar estado del servidor
+        // ------------------------------------------------
+
+        async function actualizarEstado() {
+
+            try {
+
+                const respuesta = await fetch(
+                    "/estado",
+                    {
+                        cache: "no-store"
+                    }
+                );
+
+                const datos = await respuesta.json();
+
+                cambiarVideo(datos.estado);
+
+            }
+
+            catch (error) {
+
+                console.error(
+                    "Error consultando estado:",
+                    error
+                );
+
+            }
+
+        }
+
+
+        // ------------------------------------------------
+        // Estado inicial
+        // ------------------------------------------------
+
+        cambiarVideo("esperando");
+
+
+        // ------------------------------------------------
+        // Comprobar cada 300 ms
+        // ------------------------------------------------
+
+        setInterval(
+            actualizarEstado,
+            300
+        );
+
+
+        // ------------------------------------------------
+        // Intentar reproducir cuando haya interacción
+        // ------------------------------------------------
+
+        document.addEventListener(
+            "click",
+            () => {
+
+                video.play().catch(() => {});
+
+            }
+        );
+
+    </script>
+
+</body>
+
+</html>
