@@ -11,6 +11,7 @@ from ultralytics import YOLO
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 # =====================================================================
 # 0. GENERADOR AUTOMÁTICO DE VIDEOS DE PRUEBA
@@ -317,21 +318,26 @@ def obtener_estado():
 
 @app.post("/detectar")
 def detectar_frame():
-    archivo = request.files.get("frame")
+    return reconocer_imagen()
+
+
+@app.post("/recognize")
+def reconocer_imagen():
+    archivo = request.files.get("image") or request.files.get("frame")
     if archivo is None:
-        return jsonify(error="No se recibió ningún fotograma"), 400
+        return jsonify(success=False, message="No se recibió ninguna imagen"), 400
 
     datos_frame = np.frombuffer(archivo.read(), dtype=np.uint8)
     frame_camara = cv2.imdecode(datos_frame, cv2.IMREAD_COLOR)
     if frame_camara is None:
-        return jsonify(error="El fotograma no es válido"), 400
+        return jsonify(success=False, message="La imagen no es válida"), 400
 
     with lock_deteccion:
         resultado = analizar_frame(frame_camara)
     return jsonify(resultado)
 
 
-@app.get("/static/<nombre_video>")
+@app.get("/videos/<nombre_video>")
 def servir_video(nombre_video):
     videos = {
         "espera.mp4": "espera.mp4",
@@ -341,6 +347,11 @@ def servir_video(nombre_video):
     if archivo is None:
         return jsonify(error="Video no encontrado"), 404
     return send_file(os.path.join(BASE_DIR, archivo), mimetype="video/mp4")
+
+
+@app.get("/static/<nombre_video>")
+def servir_video_compatibilidad(nombre_video):
+    return servir_video(nombre_video)
 
 
 # =====================================================================
@@ -353,72 +364,63 @@ def analizar_frame(frame_camara):
         modelo = YOLO(os.path.join(BASE_DIR, "yolo11n.pt"))
 
     results = modelo(frame_camara, imgsz=320, conf=0.45, verbose=False)
-    tiempo_actual = time.time()
     alto_frame, ancho_frame = frame_camara.shape[:2]
     area_total = alto_frame * ancho_frame
-    detecciones_frame = {}
+    detecciones = []
 
     for result in results:
         for box in result.boxes:
-            id_clase = int(box.cls)
+            confianza = float(box.conf[0])
+            id_clase = int(box.cls[0])
             nombre_ingles = modelo.names[id_clase]
-            if nombre_ingles not in detecciones_frame:
-                detecciones_frame[nombre_ingles] = {"cantidad": 0, "boxes": []}
-            detecciones_frame[nombre_ingles]["cantidad"] += 1
-            detecciones_frame[nombre_ingles]["boxes"].append(box)
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            detecciones.append({
+                "objeto": nombre_ingles,
+                "confianza": confianza,
+                "box": (x1, y1, x2, y2),
+            })
 
-    nuevo_texto = ""
+    if not detecciones:
+        return {
+            "success": False,
+            "message": "No se pudo reconocer el objeto. Intenta nuevamente.",
+            "estado": estado_ia,
+        }
 
-    # Evaluar objetos y medir si se mantienen visibles por 12 segundos continuos
-    for obj_ingles, datos in detecciones_frame.items():
-        if obj_ingles not in objetos_registrados:
-            objetos_registrados[obj_ingles] = {
-                "inicio": tiempo_actual,
-                "anunciado": False
-            }
-        else:
-            info_registro = objetos_registrados[obj_ingles]
-            tiempo_visible = tiempo_actual - info_registro["inicio"]
+    deteccion = max(detecciones, key=lambda item: item["confianza"])
+    obj_ingles = deteccion["objeto"]
+    x1, y1, x2, y2 = deteccion["box"]
+    corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
+    color_detectado = obtener_color_dominante(corte_objeto)
+    area_relativa = ((x2 - x1) * (y2 - y1)) / area_total
+    cantidad = sum(item["objeto"] == obj_ingles for item in detecciones)
 
-            if tiempo_visible >= 12.0 and not info_registro["anunciado"]:
-                if obj_ingles in TRADUCTOR_Y_DATOS:
-                    info_objeto = TRADUCTOR_Y_DATOS[obj_ingles]
-                else:
-                    nombre_limpio = obj_ingles.replace("_", " ")
-                    info_objeto = {"nombre": nombre_limpio, "genero": "m", "curiosidad": ""}
+    info_objeto = TRADUCTOR_Y_DATOS.get(obj_ingles, {
+        "nombre": obj_ingles.replace("_", " "),
+        "genero": "m",
+        "curiosidad": "",
+    })
+    descripcion = describir_objeto(info_objeto, color_detectado, area_relativa, cantidad)
+    conector = random.choice(
+        CONECTORES_INICIO if primera_deteccion_global else CONECTORES_CONTINUACION
+    )
+    primera_deteccion_global = False
+    curiosidad = info_objeto.get("curiosidad", "")
+    frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
+    ultimo_texto = frase_completa
 
-                primera_box = datos["boxes"][0]
-                x1, y1, x2, y2 = map(int, primera_box.xyxy[0])
-                corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
-                
-                color_detectado = obtener_color_dominante(corte_objeto)
-                area_box = (x2 - x1) * (y2 - y1)
-                area_relativa = area_box / area_total
+    if os.environ.get("SERVER_TTS", "0") == "1":
+        cola_voz.put(frase_completa)
 
-                descripcion = describir_objeto(info_objeto, color_detectado, area_relativa, datos["cantidad"])
-
-                if primera_deteccion_global and cola_voz.empty():
-                    conector = random.choice(CONECTORES_INICIO)
-                    primera_deteccion_global = False
-                else:
-                    conector = random.choice(CONECTORES_CONTINUACION)
-
-                curiosidad = info_objeto.get("curiosidad", "")
-                frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
-                
-                cola_voz.put(frase_completa)
-                ultimo_texto = frase_completa
-                nuevo_texto = frase_completa
-                info_registro["anunciado"] = True
-
-    objetos_a_eliminar = [
-        obj for obj in objetos_registrados.keys()
-        if obj not in detecciones_frame
-    ]
-    for obj in objetos_a_eliminar:
-        del objetos_registrados[obj]
-
-    return {"estado": estado_ia, "texto": nuevo_texto}
+    return {
+        "success": True,
+        "object": info_objeto["nombre"],
+        "confidence": round(deteccion["confianza"], 4),
+        "information": curiosidad or "No hay información adicional disponible.",
+        "description": descripcion,
+        "text": frase_completa,
+        "estado": estado_ia,
+    }
 
 
 if __name__ == "__main__":
