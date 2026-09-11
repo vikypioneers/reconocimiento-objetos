@@ -6,7 +6,11 @@ import random
 import queue
 import time
 import numpy as np
+from flask import Flask, jsonify, send_file
 from ultralytics import YOLO
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = Flask(__name__)
 
 # =====================================================================
 # 0. GENERADOR AUTOMÁTICO DE VIDEOS DE PRUEBA
@@ -101,6 +105,13 @@ hilo_voz.start()
 # 2. DICCIONARIO EN ESPAÑOL Y DATOS CURIOSOS
 # =====================================================================
 TRADUCTOR_Y_DATOS = {
+    "Rocas y piedras rojizas": {"nombre": "rocas y piedras rojizas", "genero": "f_p", "curiosidad": "¿Sabías que Marte es rojo por el hierro de sus rocas, que se ha oxidado y formado una especie de óxido parecido al de una bicicleta vieja?"},
+    "Pequeños cráteres": {"nombre": "pequeños cráteres", "genero": "m_p", "curiosidad": "¿Sabías que Marte tiene muchísimos cráteres porque su atmósfera es mucho más delgada que la de la Tierra y deja pasar más meteoritos?"},
+    "Rover espacial": {"nombre": "rover espacial", "genero": "m", "curiosidad": "¿Sabías que algunos rovers de Marte pueden tomar fotografías, analizar rocas y recorrer el planeta sin que nadie los controle directamente desde allí?"},
+    "Bandera de Marte": {"nombre": "bandera de Marte", "genero": "f", "curiosidad": "¿Sabías que Marte no tiene una bandera oficial como los países de la Tierra? Las banderas que vemos son símbolos de exploración y ciencia."},
+    "Casco de astronauta": {"nombre": "casco de astronauta", "genero": "m", "curiosidad": "¿Sabías que un astronauta no podría respirar en Marte porque su atmósfera es demasiado delgada y está compuesta principalmente por dióxido de carbono?"},
+    "Tubos y recipientes científicos": {"nombre": "tubos y recipientes científicos", "genero": "m_p", "curiosidad": "¿Sabías que los científicos estudian las rocas marcianas para descubrir pistas sobre si Marte tuvo agua líquida en el pasado?"},
+    "Módulo o base espacial": {"nombre": "módulo o base espacial", "genero": "m", "curiosidad": "¿Sabías que vivir en Marte sería como vivir dentro de una nave espacial, protegido del frío extremo, la radiación y la falta de aire respirable?"},
     "person": {"nombre": "persona", "genero": "f", "curiosidad": "¿Sabías que el cerebro humano consume alrededor del 20% de la energía del cuerpo mientras estudias?"},
     "tie": {"nombre": "corbata", "genero": "f", "curiosidad": "¿Sabías que la corbata se originó en el siglo XVII como parte del uniforme militar de los soldados croatas?"},
     "backpack": {"nombre": "mochila", "genero": "f", "curiosidad": "¿Sabías que se recomienda que la mochila escolar no supere el 10% al 15% de tu peso corporal?"},
@@ -287,117 +298,125 @@ def describir_objeto(info, color, area_relativa, cantidad):
     return desc_basica
 
 # =====================================================================
-# 4. INICIALIZACIÓN
+# 4. SERVIDOR WEB
 # =====================================================================
-model = YOLO("yolo11n.pt")
-cap_camara = cv2.VideoCapture(0)
-cap_camara.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap_camara.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+@app.get("/")
+def pagina_principal():
+    return send_file(os.path.join(BASE_DIR, "index.html"))
 
-video_espera = cv2.VideoCapture("espera.mp4")
-video_hablando = cv2.VideoCapture("hablando.mp4")
 
-objetos_registrados = {}
-primera_deteccion_global = True
+@app.get("/estado")
+def obtener_estado():
+    return jsonify(estado=estado_ia)
 
-print("--- Sistema de Visión Artificial e Interacción en Español Iniciado ---")
+
+@app.get("/static/<nombre_video>")
+def servir_video(nombre_video):
+    videos = {
+        "espera.mp4": "espera.mp4",
+        "hablando.mp4": "hablando.mp4",
+    }
+    archivo = videos.get(nombre_video)
+    if archivo is None:
+        return jsonify(error="Video no encontrado"), 404
+    return send_file(os.path.join(BASE_DIR, archivo), mimetype="video/mp4")
+
 
 # =====================================================================
-# 5. BUCLE PRINCIPAL
+# 5. BUCLE DE DETECCIÓN EN SEGUNDO PLANO
 # =====================================================================
-while cap_camara.isOpened():
-    success, frame_camara = cap_camara.read()
-    if not success:
-        break
+def bucle_deteccion():
+    global primera_deteccion_global
+
+    model = YOLO(os.path.join(BASE_DIR, "yolo11n.pt"))
+    cap_camara = cv2.VideoCapture(0)
+    cap_camara.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap_camara.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    objetos_registrados = {}
+    primera_deteccion_global = True
+
+    if not cap_camara.isOpened():
+        print("[Error] No se pudo abrir la cámara.")
+        return
+
+    print("--- Sistema de Visión Artificial e Interacción en Español Iniciado ---")
+
+    while ejecutando:
+        success, frame_camara = cap_camara.read()
+        if not success:
+            break
         
-    results = model(frame_camara, imgsz=320, conf=0.45, verbose=False)
-    tiempo_actual = time.time()
-    alto_frame, ancho_frame = frame_camara.shape[:2]
-    area_total = alto_frame * ancho_frame
+        results = model(frame_camara, imgsz=320, conf=0.45, verbose=False)
+        tiempo_actual = time.time()
+        alto_frame, ancho_frame = frame_camara.shape[:2]
+        area_total = alto_frame * ancho_frame
 
-    detecciones_frame = {}
+        detecciones_frame = {}
 
-    for result in results:
-        for box in result.boxes:
-            id_clase = int(box.cls)
-            nombre_ingles = model.names[id_clase]
-            if nombre_ingles not in detecciones_frame:
-                detecciones_frame[nombre_ingles] = {"cantidad": 0, "boxes": []}
-            detecciones_frame[nombre_ingles]["cantidad"] += 1
-            detecciones_frame[nombre_ingles]["boxes"].append(box)
+        for result in results:
+            for box in result.boxes:
+                id_clase = int(box.cls)
+                nombre_ingles = model.names[id_clase]
+                if nombre_ingles not in detecciones_frame:
+                    detecciones_frame[nombre_ingles] = {"cantidad": 0, "boxes": []}
+                detecciones_frame[nombre_ingles]["cantidad"] += 1
+                detecciones_frame[nombre_ingles]["boxes"].append(box)
 
-    # Evaluar objetos y medir si se mantienen visibles por 12 segundos continuos
-    for obj_ingles, datos in detecciones_frame.items():
-        if obj_ingles not in objetos_registrados:
-            # Registrar el tiempo de aparición inicial del objeto
-            objetos_registrados[obj_ingles] = {
-                "inicio": tiempo_actual,
-                "anunciado": False
-            }
-        else:
-            info_registro = objetos_registrados[obj_ingles]
-            tiempo_visible = tiempo_actual - info_registro["inicio"]
+        # Evaluar objetos y medir si se mantienen visibles por 12 segundos continuos
+        for obj_ingles, datos in detecciones_frame.items():
+            if obj_ingles not in objetos_registrados:
+                objetos_registrados[obj_ingles] = {
+                    "inicio": tiempo_actual,
+                    "anunciado": False
+                }
+            else:
+                info_registro = objetos_registrados[obj_ingles]
+                tiempo_visible = tiempo_actual - info_registro["inicio"]
 
-            # Comprobar si han transcurrido los 12 segundos antes de anunciar
-            if tiempo_visible >= 12.0 and not info_registro["anunciado"]:
-                if obj_ingles in TRADUCTOR_Y_DATOS:
-                    info_objeto = TRADUCTOR_Y_DATOS[obj_ingles]
-                else:
-                    nombre_limpio = obj_ingles.replace("_", " ")
-                    info_objeto = {"nombre": nombre_limpio, "genero": "m", "curiosidad": ""}
+                # Comprobar si han transcurrido los 12 segundos antes de anunciar
+                if tiempo_visible >= 12.0 and not info_registro["anunciado"]:
+                    if obj_ingles in TRADUCTOR_Y_DATOS:
+                        info_objeto = TRADUCTOR_Y_DATOS[obj_ingles]
+                    else:
+                        nombre_limpio = obj_ingles.replace("_", " ")
+                        info_objeto = {"nombre": nombre_limpio, "genero": "m", "curiosidad": ""}
 
-                primera_box = datos["boxes"][0]
-                x1, y1, x2, y2 = map(int, primera_box.xyxy[0])
-                corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
+                    primera_box = datos["boxes"][0]
+                    x1, y1, x2, y2 = map(int, primera_box.xyxy[0])
+                    corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
                 
-                color_detectado = obtener_color_dominante(corte_objeto)
-                area_box = (x2 - x1) * (y2 - y1)
-                area_relativa = area_box / area_total
+                    color_detectado = obtener_color_dominante(corte_objeto)
+                    area_box = (x2 - x1) * (y2 - y1)
+                    area_relativa = area_box / area_total
 
-                descripcion = describir_objeto(info_objeto, color_detectado, area_relativa, datos["cantidad"])
+                    descripcion = describir_objeto(info_objeto, color_detectado, area_relativa, datos["cantidad"])
 
-                if primera_deteccion_global and cola_voz.empty():
-                    conector = random.choice(CONECTORES_INICIO)
-                    primera_deteccion_global = False
-                else:
-                    conector = random.choice(CONECTORES_CONTINUACION)
+                    if primera_deteccion_global and cola_voz.empty():
+                        conector = random.choice(CONECTORES_INICIO)
+                        primera_deteccion_global = False
+                    else:
+                        conector = random.choice(CONECTORES_CONTINUACION)
 
-                curiosidad = info_objeto.get("curiosidad", "")
-                frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
+                    curiosidad = info_objeto.get("curiosidad", "")
+                    frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
                 
-                cola_voz.put(frase_completa)
-                info_registro["anunciado"] = True
+                    cola_voz.put(frase_completa)
+                    info_registro["anunciado"] = True
 
-    # Eliminar objetos del registro si ya no aparecen en la cámara
-    objetos_a_eliminar = [
-        obj for obj in objetos_registrados.keys()
-        if obj not in detecciones_frame
-    ]
-    for obj in objetos_a_eliminar:
-        del objetos_registrados[obj]
+        objetos_a_eliminar = [
+            obj for obj in objetos_registrados.keys()
+            if obj not in detecciones_frame
+        ]
+        for obj in objetos_a_eliminar:
+            del objetos_registrados[obj]
 
-    # =====================================================================
-    # 6. RENDERIZADO VISUAL
-    # =====================================================================
-    if estado_ia == "espera":
-        ret_face, frame_face = video_espera.read()
-        if not ret_face:
-            video_espera.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret_face, frame_face = video_espera.read()
-    else:
-        ret_face, frame_face = video_hablando.read()
-        if not ret_face:
-            video_hablando.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret_face, frame_face = video_hablando.read()
+    cap_camara.release()
 
-    frame_face_resized = cv2.resize(frame_face, (640, 480))
-    cv2.imshow("Interfaz de Inteligencia Artificial", frame_face_resized)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        ejecutando = False
-        break
+hilo_deteccion = threading.Thread(target=bucle_deteccion, daemon=True)
+hilo_deteccion.start()
 
-cap_camara.release()
-video_espera.release()
-video_hablando.release()
-cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
