@@ -45,6 +45,25 @@
             object-fit: cover;
         }
 
+        #camara {
+            display: none;
+        }
+
+        #activar-camara {
+            position: fixed;
+            z-index: 2;
+            left: 50%;
+            bottom: 8%;
+            transform: translateX(-50%);
+            padding: 14px 22px;
+            border: 0;
+            border-radius: 8px;
+            background: #ffffff;
+            color: #111111;
+            font: 600 16px sans-serif;
+            cursor: pointer;
+        }
+
     </style>
 
 </head>
@@ -64,15 +83,25 @@
         playsinline
     ></video>
 
+    <video id="camara" autoplay muted playsinline></video>
+    <canvas id="captura" hidden></canvas>
+    <button id="activar-camara" type="button">Activar cámara</button>
+
 
     <script>
 
         const video = document.getElementById("pantalla");
+        const camara = document.getElementById("camara");
+        const captura = document.getElementById("captura");
+        const botonCamara = document.getElementById("activar-camara");
 
         const VIDEO_ESPERANDO = "/static/espera.mp4";
         const VIDEO_HABLANDO = "/static/hablando.mp4";
 
         let estadoAnterior = null;
+        let camaraActiva = false;
+        let analisisEnCurso = false;
+        let ultimoTextoReproducido = "";
 
 
         // ------------------------------------------------
@@ -151,6 +180,10 @@
 
                 cambiarVideo(datos.estado);
 
+                if (datos.texto && datos.texto !== ultimoTextoReproducido) {
+                    reproducirTexto(datos.texto);
+                }
+
             }
 
             catch (error) {
@@ -165,12 +198,80 @@
         }
 
 
+        function reproducirTexto(texto) {
+            ultimoTextoReproducido = texto;
+            window.speechSynthesis.cancel();
+            const mensaje = new SpeechSynthesisUtterance(texto);
+            mensaje.lang = "es-ES";
+            mensaje.rate = 0.95;
+            window.speechSynthesis.speak(mensaje);
+        }
+
+
+        async function analizarCamara() {
+            if (!camaraActiva || analisisEnCurso || camara.readyState < 2) {
+                return;
+            }
+
+            analisisEnCurso = true;
+            captura.width = 640;
+            captura.height = 480;
+            captura.getContext("2d").drawImage(camara, 0, 0, 640, 480);
+
+            try {
+                const imagen = await new Promise(resolve =>
+                    captura.toBlob(resolve, "image/jpeg", 0.7)
+                );
+                const datos = new FormData();
+                datos.append("frame", imagen, "camara.jpg");
+                const respuesta = await fetch("/detectar", {
+                    method: "POST",
+                    body: datos,
+                    cache: "no-store"
+                });
+                const resultado = await respuesta.json();
+                if (resultado.estado) {
+                    cambiarVideo(resultado.estado);
+                }
+                if (resultado.texto) {
+                    reproducirTexto(resultado.texto);
+                }
+            } catch (error) {
+                console.error("Error analizando la cámara:", error);
+            } finally {
+                analisisEnCurso = false;
+            }
+        }
+
+
+        async function activarCamara() {
+            try {
+                const flujo = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 },
+                    audio: false
+                });
+                camara.srcObject = flujo;
+                camaraActiva = true;
+                botonCamara.hidden = true;
+                analizarCamara();
+            } catch (error) {
+                console.error("No se pudo acceder a la cámara:", error);
+                botonCamara.textContent = "Permiso de cámara rechazado";
+            }
+        }
+
+
         // ------------------------------------------------
         // Estado inicial
         // ------------------------------------------------
 
         cambiarVideo("espera");
         actualizarEstado();
+        botonCamara.addEventListener("click", activarCamara);
+
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            activarCamara();
+        }
 
 
         // ------------------------------------------------
@@ -181,6 +282,8 @@
             actualizarEstado,
             300
         );
+
+        setInterval(analizarCamara, 1500);
 
 
         // ------------------------------------------------

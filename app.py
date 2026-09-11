@@ -6,7 +6,7 @@ import random
 import queue
 import time
 import numpy as np
-from flask import Flask, jsonify, send_file
+from flask import Flask, jsonify, request, send_file
 from ultralytics import YOLO
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +51,11 @@ crear_videos_de_prueba()
 cola_voz = queue.Queue()
 estado_ia = "espera"
 ejecutando = True
+modelo = None
+objetos_registrados = {}
+primera_deteccion_global = True
+ultimo_texto = ""
+lock_deteccion = threading.Lock()
 
 def hablar_texto(texto):
     """Ejecuta TTS buscando preferentemente una voz masculina en español."""
@@ -310,6 +315,22 @@ def obtener_estado():
     return jsonify(estado=estado_ia)
 
 
+@app.post("/detectar")
+def detectar_frame():
+    archivo = request.files.get("frame")
+    if archivo is None:
+        return jsonify(error="No se recibió ningún fotograma"), 400
+
+    datos_frame = np.frombuffer(archivo.read(), dtype=np.uint8)
+    frame_camara = cv2.imdecode(datos_frame, cv2.IMREAD_COLOR)
+    if frame_camara is None:
+        return jsonify(error="El fotograma no es válido"), 400
+
+    with lock_deteccion:
+        resultado = analizar_frame(frame_camara)
+    return jsonify(resultado)
+
+
 @app.get("/static/<nombre_video>")
 def servir_video(nombre_video):
     videos = {
@@ -323,99 +344,81 @@ def servir_video(nombre_video):
 
 
 # =====================================================================
-# 5. BUCLE DE DETECCIÓN EN SEGUNDO PLANO
+# 5. DETECCIÓN DE FOTOGRAMAS ENVIADOS POR EL NAVEGADOR
 # =====================================================================
-def bucle_deteccion():
-    global primera_deteccion_global
+def analizar_frame(frame_camara):
+    global modelo, primera_deteccion_global, ultimo_texto
 
-    model = YOLO(os.path.join(BASE_DIR, "yolo11n.pt"))
-    cap_camara = cv2.VideoCapture(0)
-    cap_camara.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap_camara.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    if modelo is None:
+        modelo = YOLO(os.path.join(BASE_DIR, "yolo11n.pt"))
 
-    objetos_registrados = {}
-    primera_deteccion_global = True
+    results = modelo(frame_camara, imgsz=320, conf=0.45, verbose=False)
+    tiempo_actual = time.time()
+    alto_frame, ancho_frame = frame_camara.shape[:2]
+    area_total = alto_frame * ancho_frame
+    detecciones_frame = {}
 
-    if not cap_camara.isOpened():
-        print("[Error] No se pudo abrir la cámara.")
-        return
+    for result in results:
+        for box in result.boxes:
+            id_clase = int(box.cls)
+            nombre_ingles = modelo.names[id_clase]
+            if nombre_ingles not in detecciones_frame:
+                detecciones_frame[nombre_ingles] = {"cantidad": 0, "boxes": []}
+            detecciones_frame[nombre_ingles]["cantidad"] += 1
+            detecciones_frame[nombre_ingles]["boxes"].append(box)
 
-    print("--- Sistema de Visión Artificial e Interacción en Español Iniciado ---")
+    nuevo_texto = ""
 
-    while ejecutando:
-        success, frame_camara = cap_camara.read()
-        if not success:
-            break
-        
-        results = model(frame_camara, imgsz=320, conf=0.45, verbose=False)
-        tiempo_actual = time.time()
-        alto_frame, ancho_frame = frame_camara.shape[:2]
-        area_total = alto_frame * ancho_frame
+    # Evaluar objetos y medir si se mantienen visibles por 12 segundos continuos
+    for obj_ingles, datos in detecciones_frame.items():
+        if obj_ingles not in objetos_registrados:
+            objetos_registrados[obj_ingles] = {
+                "inicio": tiempo_actual,
+                "anunciado": False
+            }
+        else:
+            info_registro = objetos_registrados[obj_ingles]
+            tiempo_visible = tiempo_actual - info_registro["inicio"]
 
-        detecciones_frame = {}
+            if tiempo_visible >= 12.0 and not info_registro["anunciado"]:
+                if obj_ingles in TRADUCTOR_Y_DATOS:
+                    info_objeto = TRADUCTOR_Y_DATOS[obj_ingles]
+                else:
+                    nombre_limpio = obj_ingles.replace("_", " ")
+                    info_objeto = {"nombre": nombre_limpio, "genero": "m", "curiosidad": ""}
 
-        for result in results:
-            for box in result.boxes:
-                id_clase = int(box.cls)
-                nombre_ingles = model.names[id_clase]
-                if nombre_ingles not in detecciones_frame:
-                    detecciones_frame[nombre_ingles] = {"cantidad": 0, "boxes": []}
-                detecciones_frame[nombre_ingles]["cantidad"] += 1
-                detecciones_frame[nombre_ingles]["boxes"].append(box)
-
-        # Evaluar objetos y medir si se mantienen visibles por 12 segundos continuos
-        for obj_ingles, datos in detecciones_frame.items():
-            if obj_ingles not in objetos_registrados:
-                objetos_registrados[obj_ingles] = {
-                    "inicio": tiempo_actual,
-                    "anunciado": False
-                }
-            else:
-                info_registro = objetos_registrados[obj_ingles]
-                tiempo_visible = tiempo_actual - info_registro["inicio"]
-
-                # Comprobar si han transcurrido los 12 segundos antes de anunciar
-                if tiempo_visible >= 12.0 and not info_registro["anunciado"]:
-                    if obj_ingles in TRADUCTOR_Y_DATOS:
-                        info_objeto = TRADUCTOR_Y_DATOS[obj_ingles]
-                    else:
-                        nombre_limpio = obj_ingles.replace("_", " ")
-                        info_objeto = {"nombre": nombre_limpio, "genero": "m", "curiosidad": ""}
-
-                    primera_box = datos["boxes"][0]
-                    x1, y1, x2, y2 = map(int, primera_box.xyxy[0])
-                    corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
+                primera_box = datos["boxes"][0]
+                x1, y1, x2, y2 = map(int, primera_box.xyxy[0])
+                corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
                 
-                    color_detectado = obtener_color_dominante(corte_objeto)
-                    area_box = (x2 - x1) * (y2 - y1)
-                    area_relativa = area_box / area_total
+                color_detectado = obtener_color_dominante(corte_objeto)
+                area_box = (x2 - x1) * (y2 - y1)
+                area_relativa = area_box / area_total
 
-                    descripcion = describir_objeto(info_objeto, color_detectado, area_relativa, datos["cantidad"])
+                descripcion = describir_objeto(info_objeto, color_detectado, area_relativa, datos["cantidad"])
 
-                    if primera_deteccion_global and cola_voz.empty():
-                        conector = random.choice(CONECTORES_INICIO)
-                        primera_deteccion_global = False
-                    else:
-                        conector = random.choice(CONECTORES_CONTINUACION)
+                if primera_deteccion_global and cola_voz.empty():
+                    conector = random.choice(CONECTORES_INICIO)
+                    primera_deteccion_global = False
+                else:
+                    conector = random.choice(CONECTORES_CONTINUACION)
 
-                    curiosidad = info_objeto.get("curiosidad", "")
-                    frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
+                curiosidad = info_objeto.get("curiosidad", "")
+                frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
                 
-                    cola_voz.put(frase_completa)
-                    info_registro["anunciado"] = True
+                cola_voz.put(frase_completa)
+                ultimo_texto = frase_completa
+                nuevo_texto = frase_completa
+                info_registro["anunciado"] = True
 
-        objetos_a_eliminar = [
-            obj for obj in objetos_registrados.keys()
-            if obj not in detecciones_frame
-        ]
-        for obj in objetos_a_eliminar:
-            del objetos_registrados[obj]
+    objetos_a_eliminar = [
+        obj for obj in objetos_registrados.keys()
+        if obj not in detecciones_frame
+    ]
+    for obj in objetos_a_eliminar:
+        del objetos_registrados[obj]
 
-    cap_camara.release()
-
-
-hilo_deteccion = threading.Thread(target=bucle_deteccion, daemon=True)
-hilo_deteccion.start()
+    return {"estado": estado_ia, "texto": nuevo_texto}
 
 
 if __name__ == "__main__":
