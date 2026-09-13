@@ -1,9 +1,7 @@
 import os
 import cv2
-import pyttsx3
-import threading
 import random
-import queue
+import threading
 import time
 import numpy as np
 from flask import Flask, jsonify, request, send_file
@@ -20,8 +18,11 @@ def crear_videos_de_prueba():
     ancho, alto, fps = 640, 480, 30
     cuatrocc = cv2.VideoWriter_fourcc(*'mp4v')
     
-    if not os.path.exists("espera.mp4"):
-        out = cv2.VideoWriter("espera.mp4", cuatrocc, fps, (ancho, alto))
+    espera_path = os.path.join(BASE_DIR, "espera.mp4")
+    hablando_path = os.path.join(BASE_DIR, "hablando.mp4")
+
+    if not os.path.exists(espera_path):
+        out = cv2.VideoWriter(espera_path, cuatrocc, fps, (ancho, alto))
         for i in range(90):
             frame = np.zeros((alto, ancho, 3), dtype=np.uint8)
             cv2.circle(frame, (320, 240), 120, (0, 255, 0), 3)
@@ -32,8 +33,8 @@ def crear_videos_de_prueba():
             out.write(frame)
         out.release()
 
-    if not os.path.exists("hablando.mp4"):
-        out = cv2.VideoWriter("hablando.mp4", cuatrocc, fps, (ancho, alto))
+    if not os.path.exists(hablando_path):
+        out = cv2.VideoWriter(hablando_path, cuatrocc, fps, (ancho, alto))
         for i in range(60):
             frame = np.zeros((alto, ancho, 3), dtype=np.uint8)
             cv2.circle(frame, (320, 240), 120, (0, 0, 255), 3)
@@ -47,65 +48,13 @@ def crear_videos_de_prueba():
 crear_videos_de_prueba()
 
 # =====================================================================
-# 1. COLA DE VOZ Y TTS EN SEGUNDO PLANO
+# 1. ESTADO DEL DETECTOR
 # =====================================================================
-cola_voz = queue.Queue()
-estado_ia = "espera"
-ejecutando = True
 modelo = None
-objetos_registrados = {}
 primera_deteccion_global = True
-ultimo_texto = ""
 lock_deteccion = threading.Lock()
-
-def hablar_texto(texto):
-    """Ejecuta TTS buscando preferentemente una voz masculina en español."""
-    try:
-        engine = pyttsx3.init()
-        voces = engine.getProperty('voices')
-        voz_seleccionada = None
-
-        # 1. Buscar una voz en español que sea masculina
-        for voz in voces:
-            es_espanol = "spanish" in voz.name.lower() or "es" in voz.id.lower()
-            es_masculina = "male" in voz.name.lower() or "david" in voz.name.lower() or "pablo" in voz.name.lower() or "raul" in voz.name.lower()
-            
-            if es_espanol and es_masculina:
-                voz_seleccionada = voz.id
-                break
-
-        # 2. Si no encuentra una voz masculina específica, usa la primera en español disponible
-        if not voz_seleccionada:
-            for voz in voces:
-                if "spanish" in voz.name.lower() or "es" in voz.id.lower():
-                    voz_seleccionada = voz.id
-                    break
-
-        if voz_seleccionada:
-            engine.setProperty('voice', voz_seleccionada)
-
-        engine.setProperty('rate', 160)
-        engine.say(texto)
-        engine.runAndWait()
-        engine.stop()
-    except Exception as e:
-        print(f"[Error TTS]: {e}")
-
-def bucle_voz():
-    """Procesa la cola de mensajes de voz en un hilo secundario."""
-    global estado_ia, ejecutando
-    while ejecutando:
-        try:
-            texto = cola_voz.get(timeout=0.2)
-            estado_ia = "hablando"
-            hablar_texto(texto)
-            estado_ia = "espera"
-            cola_voz.task_done()
-        except queue.Empty:
-            continue
-
-hilo_voz = threading.Thread(target=bucle_voz, daemon=True)
-hilo_voz.start()
+estado_ia = "espera"
+objetos_registrados = {}
 
 # =====================================================================
 # 2. DICCIONARIO EN ESPAÑOL Y DATOS CURIOSOS
@@ -358,7 +307,7 @@ def servir_video_compatibilidad(nombre_video):
 # 5. DETECCIÓN DE FOTOGRAMAS ENVIADOS POR EL NAVEGADOR
 # =====================================================================
 def analizar_frame(frame_camara):
-    global modelo, primera_deteccion_global, ultimo_texto
+    global modelo, primera_deteccion_global
 
     if modelo is None:
         modelo = YOLO(os.path.join(BASE_DIR, "yolo11n.pt"))
@@ -381,6 +330,7 @@ def analizar_frame(frame_camara):
             })
 
     if not detecciones:
+        objetos_registrados.clear()
         return {
             "success": False,
             "message": "No se pudo reconocer el objeto. Intenta nuevamente.",
@@ -389,6 +339,18 @@ def analizar_frame(frame_camara):
 
     deteccion = max(detecciones, key=lambda item: item["confianza"])
     obj_ingles = deteccion["objeto"]
+    tiempo_actual = time.time()
+    registro = objetos_registrados.setdefault(obj_ingles, {
+        "inicio": tiempo_actual,
+        "anunciado": False,
+    })
+    for objeto_registrado in list(objetos_registrados):
+        if objeto_registrado != obj_ingles:
+            del objetos_registrados[objeto_registrado]
+
+    puede_anunciar = (
+        tiempo_actual - registro["inicio"] >= 12.0 and not registro["anunciado"]
+    )
     x1, y1, x2, y2 = deteccion["box"]
     corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
     color_detectado = obtener_color_dominante(corte_objeto)
@@ -401,17 +363,15 @@ def analizar_frame(frame_camara):
         "curiosidad": "",
     })
     descripcion = describir_objeto(info_objeto, color_detectado, area_relativa, cantidad)
-    conector = random.choice(
-        CONECTORES_INICIO if primera_deteccion_global else CONECTORES_CONTINUACION
-    )
-    primera_deteccion_global = False
     curiosidad = info_objeto.get("curiosidad", "")
-    frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
-    ultimo_texto = frase_completa
-
-    if os.environ.get("SERVER_TTS", "0") == "1":
-        cola_voz.put(frase_completa)
-
+    frase_completa = ""
+    if puede_anunciar:
+        conector = random.choice(
+            CONECTORES_INICIO if primera_deteccion_global else CONECTORES_CONTINUACION
+        )
+        primera_deteccion_global = False
+        frase_completa = f"{conector} {descripcion}. {curiosidad}".strip()
+        registro["anunciado"] = True
     return {
         "success": True,
         "object": info_objeto["nombre"],
