@@ -9,8 +9,45 @@
 </head>
 <body>
     <video id="video-robot" class="robot-video" autoplay muted playsinline loop aria-hidden="true"></video>
-    <video id="camara" autoplay muted playsinline hidden></video>
-    <canvas id="captura" hidden></canvas>
+    <div class="robot-overlay" aria-hidden="true"></div>
+    <main class="app-shell">
+        <header class="app-header">
+            <div>
+                <p class="eyebrow">Asistente visual</p>
+                <h1>Detector inteligente</h1>
+            </div>
+            <span id="estado" class="status">Cámara apagada</span>
+        </header>
+        <section class="camera-panel" aria-label="Vista previa de la cámara">
+            <video id="camara" autoplay muted playsinline hidden></video>
+            <div id="visor-vacio" class="visor-vacio">
+                <span class="visor-icon" aria-hidden="true">📷</span>
+                <p>Activa la cámara para enfocar un objeto.</p>
+            </div>
+        </section>
+        <canvas id="captura" hidden></canvas>
+        <p id="mensaje" class="message" role="status">La cámara se activará cuando lo indiques.</p>
+        <div class="controls">
+            <button id="activar-camara" class="button button-primary" type="button">📷 Activar cámara</button>
+            <button id="capturar-objeto" class="button button-accent" type="button" disabled>🔍 Reconocer objeto</button>
+        </div>
+        <section id="resultado" class="result-panel" aria-live="polite" hidden>
+            <div class="result-heading">
+                <span class="result-mark" aria-hidden="true">✓</span>
+                <div>
+                    <p class="eyebrow">Resultado</p>
+                    <h2 id="objeto">Objeto</h2>
+                </div>
+            </div>
+            <div class="confidence-row"><span>Confianza</span><strong id="confianza">-</strong></div>
+            <p id="descripcion" class="description"></p>
+            <p id="informacion" class="information"></p>
+            <div class="audio-controls">
+                <button id="escuchar-informacion" class="button button-secondary" type="button" disabled>🔊 Escuchar información</button>
+                <button id="detener-audio" class="button button-quiet" type="button">⏹ Detener audio</button>
+            </div>
+        </section>
+    </main>
     <script src="/static/js/camera.js"></script>
 </body>
 </html>
