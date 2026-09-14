@@ -4,12 +4,202 @@ import random
 import threading
 import time
 import numpy as np
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, render_template_string
 from ultralytics import YOLO
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+
+HTML_PAGE = '''
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Detector Automático</title>
+  <style>
+    :root {
+      --fondo: #04151d;
+      --color: #e8fff7;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--fondo);
+      color: var(--color);
+      font-family: Arial, Helvetica, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #robot-video {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      background: var(--fondo);
+      display: block;
+      outline: none;
+      border: none;
+      z-index: 1;
+    }
+
+    #camara {
+      display: none;
+      position: fixed;
+      left: -9999px;
+      top: -9999px;
+    }
+
+    #captura {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <video id="robot-video" autoplay muted loop playsinline></video>
+  <video id="camara" autoplay muted playsinline></video>
+  <canvas id="captura"></canvas>
+
+  <script>
+    const camara = document.getElementById('camara');
+    const captura = document.getElementById('captura');
+    const videoRobot = document.getElementById('robot-video');
+
+    const VIDEO_ESPERA = '/videos/espera.mp4';
+    const VIDEO_HABLANDO = '/videos/hablando.mp4';
+
+    let flujoCamara = null;
+    let analisisEnCurso = false;
+    let ultimoTexto = '';
+    let intervaloCaptura = null;
+
+    function cambiarVideoRobot(hablando) {
+      const videoNuevo = hablando ? VIDEO_HABLANDO : VIDEO_ESPERA;
+      if (!videoRobot.src || !videoRobot.src.endsWith(videoNuevo)) {
+        videoRobot.src = videoNuevo;
+        videoRobot.load();
+      }
+      videoRobot.play().catch(() => {});
+    }
+
+    function hablar(texto) {
+      if (!texto || texto === ultimoTexto || !(window.speechSynthesis)) return;
+
+      ultimoTexto = texto;
+      window.speechSynthesis.cancel();
+
+      const voz = new SpeechSynthesisUtterance(texto);
+      voz.lang = 'es-ES';
+      voz.rate = 0.95;
+      voz.volume = 1.0;
+      voz.onstart = () => cambiarVideoRobot(true);
+      voz.onend = () => {
+        cambiarVideoRobot(false);
+        ultimoTexto = '';
+      };
+      voz.onerror = () => {
+        cambiarVideoRobot(false);
+        ultimoTexto = '';
+      };
+
+      window.speechSynthesis.speak(voz);
+    }
+
+    async function analizarCamara() {
+      if (!flujoCamara || analisisEnCurso || camara.readyState < 2) return;
+
+      analisisEnCurso = true;
+      const ancho = camara.videoWidth || 640;
+      const alto = camara.videoHeight || 480;
+      captura.width = ancho;
+      captura.height = alto;
+
+      const ctx = captura.getContext('2d');
+      ctx.drawImage(camara, 0, 0, ancho, alto);
+
+      try {
+        const blob = await new Promise((resolve, reject) => {
+          captura.toBlob((imagen) => {
+            if (imagen) resolve(imagen);
+            else reject(new Error('La captura de la cámara no es válida'));
+          }, 'image/jpeg', 0.82);
+        });
+
+        const datos = new FormData();
+        datos.append('frame', blob, 'frame.jpg');
+
+        const respuesta = await fetch('/detectar', {
+          method: 'POST',
+          body: datos,
+          cache: 'no-store'
+        });
+
+        if (!respuesta.ok) {
+          throw new Error('No fue posible analizar la imagen');
+        }
+
+        const resultado = await respuesta.json();
+        if (resultado.success && resultado.text) {
+          hablar(resultado.text);
+        }
+      } catch (error) {
+        console.error('Error analizando la cámara:', error);
+      } finally {
+        analisisEnCurso = false;
+      }
+    }
+
+    async function iniciarPrograma() {
+      cambiarVideoRobot(false);
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.error('La cámara no es accesible en este navegador.');
+        return;
+      }
+
+      try {
+        flujoCamara = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        });
+
+        camara.srcObject = flujoCamara;
+        await camara.play();
+
+        intervaloCaptura = window.setInterval(analizarCamara, 1600);
+      } catch (error) {
+        console.error('No se pudo acceder a la cámara:', error);
+      }
+    }
+
+    iniciarPrograma();
+
+    window.addEventListener('pagehide', () => {
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      if (intervaloCaptura) clearInterval(intervaloCaptura);
+      if (flujoCamara) {
+        flujoCamara.getTracks().forEach((track) => track.stop());
+      }
+    });
+  </script>
+</body>
+</html>
+'''
 
 # =====================================================================
 # 0. GENERADOR AUTOMÁTICO DE VIDEOS DE PRUEBA
@@ -257,7 +447,7 @@ def describir_objeto(info, color, area_relativa, cantidad):
 # =====================================================================
 @app.get("/")
 def pagina_principal():
-    return send_file(os.path.join(BASE_DIR, "index.html"))
+    return render_template_string(HTML_PAGE)
 
 
 @app.get("/estado")
@@ -276,13 +466,26 @@ def reconocer_imagen():
     if archivo is None:
         return jsonify(success=False, message="No se recibió ninguna imagen"), 400
 
-    datos_frame = np.frombuffer(archivo.read(), dtype=np.uint8)
-    frame_camara = cv2.imdecode(datos_frame, cv2.IMREAD_COLOR)
-    if frame_camara is None:
-        return jsonify(success=False, message="La imagen no es válida"), 400
+    contenido = archivo.read()
+    if not contenido:
+        return jsonify(success=False, message="La imagen está vacía"), 400
 
-    with lock_deteccion:
-        resultado = analizar_frame(frame_camara)
+    frame_camara = None
+    try:
+        datos_frame = np.frombuffer(contenido, dtype=np.uint8)
+        frame_camara = cv2.imdecode(datos_frame, cv2.IMREAD_COLOR)
+        if frame_camara is None:
+            return jsonify(success=False, message="La imagen no es válida"), 400
+
+        with lock_deteccion:
+            resultado = analizar_frame(frame_camara)
+    finally:
+        # Limpiar referencias temporales para evitar memoria acumulada bajo flujo continuo.
+        if 'datos_frame' in locals():
+            del datos_frame
+        if frame_camara is not None:
+            frame_camara = None
+
     return jsonify(resultado)
 
 
