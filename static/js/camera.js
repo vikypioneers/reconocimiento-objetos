@@ -1,12 +1,18 @@
 const camara = document.getElementById('camara');
 const captura = document.getElementById('captura');
 const videoRobot = document.getElementById('video-robot');
+const estado = document.getElementById('estado');
 
 const VIDEO_ESPERA = '/videos/espera.mp4';
 const VIDEO_HABLANDO = '/videos/hablando.mp4';
 let flujoCamara = null;
 let analisisEnCurso = false;
 let ultimoTexto = '';
+
+function actualizarEstado(texto, error = false) {
+    estado.textContent = texto;
+    estado.classList.toggle('error', error);
+}
 
 function cambiarVideoRobot(hablando) {
     const videoNuevo = hablando ? VIDEO_HABLANDO : VIDEO_ESPERA;
@@ -49,8 +55,14 @@ async function analizarCamara() {
         datos.append('frame', imagen, 'camara.jpg');
         const respuesta = await fetch('/detectar', { method: 'POST', body: datos, cache: 'no-store' });
         const resultado = await respuesta.json();
-        if (resultado.success) hablar(resultado.text);
+        if (resultado.success) {
+            actualizarEstado(`Detectado: ${resultado.object} (${Math.round(resultado.confidence * 100)}%)`);
+            hablar(resultado.text);
+        } else {
+            actualizarEstado('Cámara activa. Buscando un objeto...');
+        }
     } catch (error) {
+        actualizarEstado('No se pudo analizar la imagen.', true);
         console.error('Error analizando la cámara:', error);
     } finally {
         analisisEnCurso = false;
@@ -61,6 +73,7 @@ async function iniciarPrograma() {
     cambiarVideoRobot(false);
 
     if (!navigator.mediaDevices?.getUserMedia) {
+        actualizarEstado('Este navegador no permite usar la cámara.', true);
         console.error('Este navegador no permite acceder a la cámara.');
         return;
     }
@@ -76,9 +89,11 @@ async function iniciarPrograma() {
         });
         camara.srcObject = flujoCamara;
         await camara.play();
+        actualizarEstado('Cámara activa. Analizando...');
         camara.addEventListener('loadeddata', analizarCamara, { once: true });
         window.setInterval(analizarCamara, 1500);
     } catch (error) {
+        actualizarEstado('Permiso de cámara denegado o cámara no disponible.', true);
         console.error('No se pudo acceder a la cámara:', error);
     }
 }

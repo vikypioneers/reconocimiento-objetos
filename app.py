@@ -552,7 +552,7 @@ def analizar_frame(frame_camara):
             del objetos_registrados[objeto_registrado]
 
     puede_anunciar = (
-        tiempo_actual - registro["inicio"] >= 12.0 and not registro["anunciado"]
+        tiempo_actual - registro["inicio"] >= 3.0 and not registro["anunciado"]
     )
     x1, y1, x2, y2 = deteccion["box"]
     corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
