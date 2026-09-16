@@ -8,6 +8,8 @@ const VIDEO_HABLANDO = '/videos/hablando.mp4';
 let flujoCamara = null;
 let analisisEnCurso = false;
 let ultimoTexto = '';
+let textoPendiente = '';
+let vozHabilitada = false;
 
 function actualizarEstado(texto, error = false) {
     estado.textContent = texto;
@@ -26,6 +28,12 @@ function cambiarVideoRobot(hablando) {
 function hablar(texto) {
     if (!texto || texto === ultimoTexto || !('speechSynthesis' in window)) return;
 
+    if (!vozHabilitada) {
+        textoPendiente = texto;
+        actualizarEstado('Toca la pantalla para activar la voz.');
+        return;
+    }
+
     ultimoTexto = texto;
     window.speechSynthesis.cancel();
     const voz = new SpeechSynthesisUtterance(texto);
@@ -37,12 +45,22 @@ function hablar(texto) {
     window.speechSynthesis.speak(voz);
 }
 
+function habilitarVoz() {
+    vozHabilitada = true;
+    if (textoPendiente) {
+        const texto = textoPendiente;
+        textoPendiente = '';
+        hablar(texto);
+    }
+}
+
 async function analizarCamara() {
     if (!flujoCamara || analisisEnCurso || camara.readyState < 2) return;
 
     analisisEnCurso = true;
-    const ancho = camara.videoWidth || 640;
-    const alto = camara.videoHeight || 480;
+    const escala = Math.min(1, 640 / (camara.videoWidth || 640));
+    const ancho = Math.round((camara.videoWidth || 640) * escala);
+    const alto = Math.round((camara.videoHeight || 480) * escala);
     captura.width = ancho;
     captura.height = alto;
     captura.getContext('2d').drawImage(camara, 0, 0, ancho, alto);
@@ -53,8 +71,27 @@ async function analizarCamara() {
         });
         const datos = new FormData();
         datos.append('frame', imagen, 'camara.jpg');
-        const respuesta = await fetch('/detectar', { method: 'POST', body: datos, cache: 'no-store' });
-        const resultado = await respuesta.json();
+        const controlador = new AbortController();
+        const temporizador = window.setTimeout(() => controlador.abort(), 25000);
+        const respuesta = await fetch('/detectar', {
+            method: 'POST',
+            body: datos,
+            cache: 'no-store',
+            signal: controlador.signal,
+        });
+        window.clearTimeout(temporizador);
+        const tipoContenido = respuesta.headers.get('content-type') || '';
+        const cuerpo = await respuesta.text();
+        let resultado = {};
+        if (cuerpo && tipoContenido.includes('application/json')) {
+            resultado = JSON.parse(cuerpo);
+        }
+        if (!respuesta.ok) {
+            throw new Error(resultado.message || `El servidor respondió ${respuesta.status}.`);
+        }
+        if (!tipoContenido.includes('application/json')) {
+            throw new Error('El servidor devolvió una respuesta no válida.');
+        }
         if (resultado.success) {
             actualizarEstado(`Detectado: ${resultado.object} (${Math.round(resultado.confidence * 100)}%)`);
             hablar(resultado.text);
@@ -62,7 +99,10 @@ async function analizarCamara() {
             actualizarEstado('Cámara activa. Buscando un objeto...');
         }
     } catch (error) {
-        actualizarEstado('No se pudo analizar la imagen.', true);
+        const mensaje = error.name === 'AbortError'
+            ? 'El servidor tardó demasiado en responder.'
+            : error.message || 'No se pudo analizar la imagen.';
+        actualizarEstado(mensaje, true);
         console.error('Error analizando la cámara:', error);
     } finally {
         analisisEnCurso = false;
@@ -71,6 +111,11 @@ async function analizarCamara() {
 
 async function iniciarPrograma() {
     cambiarVideoRobot(false);
+
+    if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        actualizarEstado('La cámara necesita una conexión HTTPS.', true);
+        return;
+    }
 
     if (!navigator.mediaDevices?.getUserMedia) {
         actualizarEstado('Este navegador no permite usar la cámara.', true);
@@ -82,8 +127,8 @@ async function iniciarPrograma() {
         flujoCamara = await navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: { ideal: 'environment' },
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
+                width: { ideal: 640 },
+                height: { ideal: 360 },
             },
             audio: false,
         });
@@ -91,7 +136,7 @@ async function iniciarPrograma() {
         await camara.play();
         actualizarEstado('Cámara activa. Analizando...');
         camara.addEventListener('loadeddata', analizarCamara, { once: true });
-        window.setInterval(analizarCamara, 1500);
+        window.setInterval(analizarCamara, 5000);
     } catch (error) {
         actualizarEstado('Permiso de cámara denegado o cámara no disponible.', true);
         console.error('No se pudo acceder a la cámara:', error);
@@ -99,6 +144,7 @@ async function iniciarPrograma() {
 }
 
 iniciarPrograma();
+window.addEventListener('pointerdown', habilitarVoz, { once: true });
 window.addEventListener('pagehide', () => {
     window.speechSynthesis?.cancel();
     flujoCamara?.getTracks().forEach(track => track.stop());
