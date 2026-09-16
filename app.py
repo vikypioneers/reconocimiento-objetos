@@ -447,7 +447,7 @@ def describir_objeto(info, color, area_relativa, cantidad):
 # =====================================================================
 @app.get("/")
 def pagina_principal():
-    return render_template_string(HTML_PAGE)
+  return send_file(os.path.join(BASE_DIR, "index.html"))
 
 
 @app.get("/estado")

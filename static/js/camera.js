@@ -41,8 +41,9 @@ async function analizarCamara() {
     if (!flujoCamara || analisisEnCurso || camara.readyState < 2) return;
 
     analisisEnCurso = true;
-    const ancho = camara.videoWidth || 640;
-    const alto = camara.videoHeight || 480;
+    const escala = Math.min(1, 640 / (camara.videoWidth || 640));
+    const ancho = Math.round((camara.videoWidth || 640) * escala);
+    const alto = Math.round((camara.videoHeight || 480) * escala);
     captura.width = ancho;
     captura.height = alto;
     captura.getContext('2d').drawImage(camara, 0, 0, ancho, alto);
@@ -82,8 +83,8 @@ async function iniciarPrograma() {
         flujoCamara = await navigator.mediaDevices.getUserMedia({
             video: {
                 facingMode: { ideal: 'environment' },
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
+                width: { ideal: 640 },
+                height: { ideal: 360 },
             },
             audio: false,
         });
@@ -91,7 +92,7 @@ async function iniciarPrograma() {
         await camara.play();
         actualizarEstado('Cámara activa. Analizando...');
         camara.addEventListener('loadeddata', analizarCamara, { once: true });
-        window.setInterval(analizarCamara, 1500);
+        window.setInterval(analizarCamara, 3000);
     } catch (error) {
         actualizarEstado('Permiso de cámara denegado o cámara no disponible.', true);
         console.error('No se pudo acceder a la cámara:', error);
