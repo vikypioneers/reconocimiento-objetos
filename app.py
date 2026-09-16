@@ -479,6 +479,13 @@ def reconocer_imagen():
 
         with lock_deteccion:
             resultado = analizar_frame(frame_camara)
+    except Exception as error:
+        app.logger.exception("Error procesando el fotograma")
+        return jsonify(
+            success=False,
+            message="El servidor no pudo procesar la imagen.",
+            error=error.__class__.__name__,
+        ), 503
     finally:
         # Limpiar referencias temporales para evitar memoria acumulada bajo flujo continuo.
         if 'datos_frame' in locals():
@@ -515,7 +522,17 @@ def analizar_frame(frame_camara):
     if modelo is None:
         modelo = YOLO(os.path.join(BASE_DIR, "yolo11n.pt"))
 
-    results = modelo(frame_camara, imgsz=320, conf=0.45, verbose=False)
+    alto_original, ancho_original = frame_camara.shape[:2]
+    lado_mayor = max(alto_original, ancho_original)
+    if lado_mayor > 640:
+        escala = 640 / lado_mayor
+        frame_camara = cv2.resize(
+            frame_camara,
+            (int(ancho_original * escala), int(alto_original * escala)),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    results = modelo(frame_camara, imgsz=256, conf=0.45, verbose=False)
     alto_frame, ancho_frame = frame_camara.shape[:2]
     area_total = alto_frame * ancho_frame
     detecciones = []
