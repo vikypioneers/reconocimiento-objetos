@@ -4,12 +4,11 @@ import random
 import threading
 import time
 import numpy as np
-from flask import Flask, jsonify, request, send_file, render_template_string
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from ultralytics import YOLO
 modelo = None
 modelo_error = None
 def obtener_modelo():
-
     global modelo
     global modelo_error
 
@@ -17,45 +16,27 @@ def obtener_modelo():
         return modelo
 
     if modelo_error is not None:
-        raise RuntimeError(
-            "El modelo YOLO no pudo cargarse."
-        )
+        raise RuntimeError("El modelo YOLO no pudo cargarse anteriormente.")
 
     try:
-
-        ruta_modelo = os.path.join(
-            BASE_DIR,
-            "yolo11n.pt"
-        )
+        ruta_modelo = os.path.join(BASE_DIR, "yolo11n.pt")
 
         if not os.path.exists(ruta_modelo):
-
             raise FileNotFoundError(
-                f"No existe el modelo: {ruta_modelo}"
+                f"No se encontró el modelo YOLO en: {ruta_modelo}"
             )
 
-        app.logger.info(
-            "Cargando modelo YOLO..."
-        )
+        app.logger.info("Cargando modelo YOLO...")
+        
+        modelo = YOLO(ruta_modelo)
 
-        modelo = YOLO(
-            ruta_modelo
-        )
-
-        app.logger.info(
-            "Modelo YOLO cargado correctamente."
-        )
+        app.logger.info("Modelo YOLO cargado correctamente.")
 
         return modelo
 
     except Exception as error:
-
         modelo_error = error
-
-        app.logger.exception(
-            "Error cargando YOLO"
-        )
-
+        app.logger.exception("ERROR CARGANDO YOLO")
         raise
       
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -505,12 +486,179 @@ def pagina_principal():
 def obtener_estado():
     return jsonify(estado=estado_ia)
 
-
 @app.post("/detectar")
-def detectar_frame():
-    return reconocer_imagen()
+def detectar():
 
+    inicio = time.time()
 
+    try:
+        app.logger.info("POST /detectar recibido")
+
+        # -----------------------------------------
+        # 1. Verificar que llegó el frame
+        # -----------------------------------------
+
+        if "frame" not in request.files:
+            return jsonify({
+                "success": False,
+                "error": "No se recibió ningún frame."
+            }), 400
+
+        archivo = request.files["frame"]
+
+        if archivo.filename == "":
+            return jsonify({
+                "success": False,
+                "error": "El frame está vacío."
+            }), 400
+
+        # -----------------------------------------
+        # 2. Leer imagen
+        # -----------------------------------------
+
+        datos = archivo.read()
+
+        if not datos:
+            return jsonify({
+                "success": False,
+                "error": "No se pudieron leer los datos de la imagen."
+            }), 400
+
+        # -----------------------------------------
+        # 3. Convertir a imagen OpenCV
+        # -----------------------------------------
+
+        imagen_np = np.frombuffer(datos, np.uint8)
+
+        frame = cv2.imdecode(imagen_np, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            return jsonify({
+                "success": False,
+                "error": "No se pudo decodificar la imagen."
+            }), 400
+
+        # -----------------------------------------
+        # 4. Reducir tamaño antes de YOLO
+        # -----------------------------------------
+
+        alto, ancho = frame.shape[:2]
+
+        max_dimension = 480
+
+        if max(alto, ancho) > max_dimension:
+
+            escala = max_dimension / max(alto, ancho)
+
+            nuevo_ancho = int(ancho * escala)
+            nuevo_alto = int(alto * escala)
+
+            frame = cv2.resize(
+                frame,
+                (nuevo_ancho, nuevo_alto),
+                interpolation=cv2.INTER_AREA
+            )
+
+        # -----------------------------------------
+        # 5. Cargar modelo una sola vez
+        # -----------------------------------------
+
+        modelo_local = obtener_modelo()
+
+        # -----------------------------------------
+        # 6. Ejecutar YOLO
+        # -----------------------------------------
+
+        resultados = modelo_local.predict(
+            source=frame,
+            imgsz=192,
+            conf=0.45,
+            device="cpu",
+            verbose=False
+        )
+
+        # -----------------------------------------
+        # 7. Buscar detecciones
+        # -----------------------------------------
+
+        mejor_objeto = None
+        mejor_confianza = 0.0
+
+        if resultados:
+
+            resultado = resultados[0]
+
+            if resultado.boxes is not None:
+
+                for caja in resultado.boxes:
+
+                    confianza = float(caja.conf[0])
+
+                    if confianza > mejor_confianza:
+
+                        clase = int(caja.cls[0])
+
+                        nombre = modelo_local.names.get(
+                            clase,
+                            str(clase)
+                        )
+
+                        mejor_confianza = confianza
+                        mejor_objeto = nombre
+
+        # -----------------------------------------
+        # 8. Sin objeto
+        # -----------------------------------------
+
+        if mejor_objeto is None:
+
+            tiempo = round(time.time() - inicio, 3)
+
+            return jsonify({
+                "success": True,
+                "detected": False,
+                "object": None,
+                "confidence": 0,
+                "text": "",
+                "processing_time": tiempo
+            })
+
+        # -----------------------------------------
+        # 9. Texto que hablará el robot
+        # -----------------------------------------
+
+        texto = f"He detectado un {mejor_objeto}."
+
+        tiempo = round(time.time() - inicio, 3)
+
+        app.logger.info(
+            f"Objeto detectado: {mejor_objeto} "
+            f"confianza={mejor_confianza:.2f} "
+            f"tiempo={tiempo}s"
+        )
+
+        # -----------------------------------------
+        # 10. Respuesta
+        # -----------------------------------------
+
+        return jsonify({
+            "success": True,
+            "detected": True,
+            "object": mejor_objeto,
+            "confidence": round(mejor_confianza, 3),
+            "text": texto,
+            "processing_time": tiempo
+        })
+
+    except Exception as error:
+
+        app.logger.exception("ERROR EN /detectar")
+
+        return jsonify({
+            "success": False,
+            "error": "Error procesando la imagen.",
+            "detail": str(error)
+        }), 500
 @app.post("/recognize")
 def reconocer_imagen():
     archivo = request.files.get("image") or request.files.get("frame")
