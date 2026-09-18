@@ -1,165 +1,66 @@
-const camara = document.getElementById('camara');
-const captura = document.getElementById('captura');
-const videoRobot = document.getElementById('video-robot');
-const estado = document.getElementById('estado');
-
-const VIDEO_ESPERA = '/videos/espera.mp4';
-const VIDEO_HABLANDO = '/videos/hablando.mp4';
+const video = document.getElementById("camera");
+const canvas = document.getElementById("canvas");
+const robotVideo = document.getElementById("robotVideo");
 
 let flujoCamara = null;
-let analisisEnCurso = false;
+
 let esperandoHablar = false;
-let ultimoObjeto = '';
-let temporizadorHabla = null;
-let intervaloAnalisis = null;
+let analisisEnCurso = false;
+
+let ultimoObjeto = null;
+let ultimoTiempoDeteccion = 0;
 
 
-// ======================================================
-// ESTADO
-// ======================================================
+// =====================================================
+// INICIAR CÁMARA
+// =====================================================
 
-function actualizarEstado(texto, error = false) {
-    if (!estado) return;
+async function iniciarCamara() {
 
-    estado.textContent = texto;
-    estado.classList.toggle('error', error);
+    try {
+
+        flujoCamara = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: "user",
+                width: {
+                    ideal: 480
+                },
+                height: {
+                    ideal: 360
+                }
+            },
+            audio: false
+        });
+
+        video.srcObject = flujoCamara;
+
+        console.log("Cámara iniciada correctamente.");
+
+        iniciarAnalisis();
+
+    } catch (error) {
+
+        console.error("No se pudo iniciar la cámara:", error);
+
+    }
 }
 
 
-// ======================================================
-// VIDEOS DEL ROBOT
-// ======================================================
-
-function cambiarVideoRobot(hablando) {
-
-    const videoNuevo = hablando
-        ? VIDEO_HABLANDO
-        : VIDEO_ESPERA;
-
-    const videoActual = videoRobot.getAttribute('data-video');
-
-    if (videoActual !== videoNuevo) {
-
-        videoRobot.pause();
-
-        videoRobot.src = videoNuevo;
-
-        videoRobot.setAttribute(
-            'data-video',
-            videoNuevo
-        );
-
-        videoRobot.load();
-    }
-
-    videoRobot.play().catch(() => {});
-}
-
-
-// ======================================================
-// HABLAR
-// ======================================================
-
-function hablar(texto) {
-
-    if (
-        !texto ||
-        !('speechSynthesis' in window)
-    ) {
-        esperandoHablar = false;
-        cambiarVideoRobot(false);
-        return;
-    }
-
-    window.speechSynthesis.cancel();
-
-    const voz = new SpeechSynthesisUtterance(texto);
-
-    voz.lang = 'es-ES';
-    voz.rate = 0.95;
-    voz.pitch = 1;
-    voz.volume = 1;
-
-    voz.onstart = () => {
-
-        esperandoHablar = false;
-
-        cambiarVideoRobot(true);
-
-        actualizarEstado(
-            'Hablando...'
-        );
-    };
-
-    voz.onend = () => {
-
-        esperandoHablar = false;
-
-        cambiarVideoRobot(false);
-
-        actualizarEstado(
-            'Cámara activa. Buscando un objeto...'
-        );
-    };
-
-    voz.onerror = () => {
-
-        esperandoHablar = false;
-
-        cambiarVideoRobot(false);
-
-        actualizarEstado(
-            'Cámara activa. Buscando un objeto...'
-        );
-    };
-
-    window.speechSynthesis.speak(voz);
-}
-
-
-// ======================================================
-// ESPERA DE 5 SEGUNDOS
-// ======================================================
-
-function programarHabla(texto, objeto) {
-
-    if (!texto || esperandoHablar) {
-        return;
-    }
-
-    esperandoHablar = true;
-
-    actualizarEstado(
-        `Detecté ${objeto}. Preparando información...`
-    );
-
-    // Cancelar temporizador anterior
-    if (temporizadorHabla) {
-        clearTimeout(temporizadorHabla);
-    }
-
-    temporizadorHabla = setTimeout(() => {
-
-        temporizadorHabla = null;
-
-        hablar(texto);
-
-    }, 5000);
-}
-
-
-// ======================================================
+// =====================================================
 // ANALIZAR CÁMARA
-// ======================================================
+// =====================================================
 
 async function analizarCamara() {
 
-    if (
-        !flujoCamara ||
-        analisisEnCurso ||
-        esperandoHablar ||
-        camara.readyState < 2
-    ) {
+    if (analisisEnCurso) {
+        return;
+    }
+
+    if (esperandoHablar) {
+        return;
+    }
+
+    if (!video.videoWidth || !video.videoHeight) {
         return;
     }
 
@@ -167,290 +68,355 @@ async function analizarCamara() {
 
     try {
 
-        const escala = Math.min(
-            1,
-            640 / (camara.videoWidth || 640)
+        // ---------------------------------------------
+        // Tamaño reducido para ahorrar memoria
+        // ---------------------------------------------
+
+        const ancho = 480;
+
+        const escala = ancho / video.videoWidth;
+
+        canvas.width = ancho;
+        canvas.height = Math.round(
+            video.videoHeight * escala
         );
 
-        const ancho = Math.round(
-            (camara.videoWidth || 640) * escala
-        );
+        const contexto = canvas.getContext("2d");
 
-        const alto = Math.round(
-            (camara.videoHeight || 480) * escala
-        );
-
-        captura.width = ancho;
-        captura.height = alto;
-
-        const ctx = captura.getContext('2d');
-
-        ctx.drawImage(
-            camara,
+        contexto.drawImage(
+            video,
             0,
             0,
-            ancho,
-            alto
+            canvas.width,
+            canvas.height
         );
 
-        const imagen = await new Promise(
-            (resolve, reject) => {
+        // ---------------------------------------------
+        // Convertir frame a JPEG
+        // ---------------------------------------------
 
-                captura.toBlob(
-                    blob => {
+        const blob = await new Promise(resolve => {
 
-                        if (blob) {
-                            resolve(blob);
-                        } else {
-                            reject(
-                                new Error(
-                                    'No se pudo capturar la cámara.'
-                                )
-                            );
-                        }
+            canvas.toBlob(
+                resolve,
+                "image/jpeg",
+                0.65
+            );
 
-                    },
-                    'image/jpeg',
-                    0.75
-                );
-            }
-        );
+        });
 
+        if (!blob) {
+            return;
+        }
+
+        // ---------------------------------------------
+        // Enviar al servidor
+        // ---------------------------------------------
 
         const datos = new FormData();
 
         datos.append(
-            'frame',
-            imagen,
-            'camara.jpg'
+            "frame",
+            blob,
+            "frame.jpg"
         );
 
-
         const respuesta = await fetch(
-            '/detectar',
+            "/detectar",
             {
-                method: 'POST',
-                body: datos,
-                cache: 'no-store'
+                method: "POST",
+                body: datos
             }
         );
 
-
-        // ==================================================
-        // IMPORTANTE:
-        // NO intentar hacer response.json() si hay 502/500
-        // ==================================================
+        // ---------------------------------------------
+        // Evitar error Unexpected token <
+        // ---------------------------------------------
 
         if (!respuesta.ok) {
 
-            let mensaje = `Servidor respondió ${respuesta.status}`;
+            const textoError = await respuesta.text();
 
-            try {
-
-                const textoError =
-                    await respuesta.text();
-
-                if (textoError) {
-                    console.error(
-                        'Respuesta del servidor:',
-                        textoError.substring(0, 500)
-                    );
-                }
-
-            } catch (_) {}
-
-            throw new Error(mensaje);
-        }
-
-
-        const resultado =
-            await respuesta.json();
-
-
-        if (
-            resultado.success &&
-            resultado.text &&
-            resultado.object
-        ) {
-
-            actualizarEstado(
-                `Detectado: ${resultado.object} (${Math.round(
-                    resultado.confidence * 100
-                )}%)`
+            console.error(
+                "Error del servidor:",
+                respuesta.status,
+                textoError
             );
 
-
-            // Evita repetir inmediatamente el mismo objeto
-            if (
-                resultado.object !== ultimoObjeto
-            ) {
-
-                ultimoObjeto =
-                    resultado.object;
-
-                programarHabla(
-                    resultado.text,
-                    resultado.object
-                );
-            }
-
-        } else {
-
-            // Si no detecta nada,
-            // no hacemos hablar al robot.
-
-            actualizarEstado(
-                'Cámara activa. Buscando un objeto...'
-            );
-
+            return;
         }
+
+        const resultado = await respuesta.json();
+
+        console.log("Resultado:", resultado);
+
+        if (!resultado.success) {
+            return;
+        }
+
+        if (!resultado.detected) {
+            return;
+        }
+
+        const objeto = resultado.object;
+        const texto = resultado.text;
+
+        if (!objeto || !texto) {
+            return;
+        }
+
+        // ---------------------------------------------
+        // Evitar hablar repetidamente del mismo objeto
+        // ---------------------------------------------
+
+        const ahora = Date.now();
+
+        const mismoObjeto =
+            objeto === ultimoObjeto;
+
+        const muyReciente =
+            ahora - ultimoTiempoDeteccion < 10000;
+
+        if (mismoObjeto && muyReciente) {
+            return;
+        }
+
+        ultimoObjeto = objeto;
+        ultimoTiempoDeteccion = ahora;
+
+        // ---------------------------------------------
+        // Esperar 5 segundos y hablar
+        // ---------------------------------------------
+
+        programarHabla(texto, objeto);
 
     } catch (error) {
 
         console.error(
-            'Error analizando la cámara:',
+            "Error analizando la cámara:",
             error
-        );
-
-        actualizarEstado(
-            'El servidor no está disponible temporalmente.',
-            true
         );
 
     } finally {
 
         analisisEnCurso = false;
+
     }
 }
 
 
-// ======================================================
-// INICIAR
-// ======================================================
+// =====================================================
+// ESPERAR 5 SEGUNDOS
+// =====================================================
 
-async function iniciarPrograma() {
+function programarHabla(texto, objeto) {
 
-    cambiarVideoRobot(false);
+    if (esperandoHablar) {
+        return;
+    }
 
-    if (
-        !navigator.mediaDevices ||
-        !navigator.mediaDevices.getUserMedia
-    ) {
+    esperandoHablar = true;
 
-        actualizarEstado(
-            'Este navegador no permite usar la cámara.',
-            true
+    console.log(
+        `Objeto detectado: ${objeto}.`
+    );
+
+    console.log(
+        "Esperando 5 segundos antes de hablar..."
+    );
+
+    setTimeout(() => {
+
+        hablar(texto);
+
+    }, 5000);
+}
+
+
+// =====================================================
+// TEXTO A VOZ
+// =====================================================
+
+function hablar(texto) {
+
+    if (!("speechSynthesis" in window)) {
+
+        console.error(
+            "El navegador no soporta síntesis de voz."
         );
+
+        volverAEspera();
 
         return;
     }
 
+    window.speechSynthesis.cancel();
 
-    try {
+    const mensaje =
+        new SpeechSynthesisUtterance(texto);
 
-        flujoCamara =
-            await navigator.mediaDevices.getUserMedia({
+    mensaje.lang = "es-ES";
+    mensaje.rate = 0.95;
+    mensaje.pitch = 1;
+    mensaje.volume = 1;
 
-                video: {
+    // ---------------------------------------------
+    // Cambiar robot a hablando
+    // ---------------------------------------------
 
-                    facingMode: {
-                        ideal: 'environment'
-                    },
+    cambiarRobotHablar();
 
-                    width: {
-                        ideal: 640
-                    },
+    mensaje.onstart = () => {
 
-                    height: {
-                        ideal: 360
-                    }
-                },
+        console.log("Robot hablando...");
 
-                audio: false
-            });
+        cambiarRobotHablar();
 
+    };
 
-        camara.srcObject =
-            flujoCamara;
+    mensaje.onend = () => {
 
-        await camara.play();
+        console.log("Robot terminó de hablar.");
 
+        volverAEspera();
 
-        actualizarEstado(
-            'Cámara activa. Buscando un objeto...'
-        );
+    };
 
-
-        // Primera detección
-        setTimeout(
-            analizarCamara,
-            1500
-        );
-
-
-        // Analizar cada 5 segundos
-        intervaloAnalisis =
-            window.setInterval(
-                analizarCamara,
-                5000
-            );
-
-
-    } catch (error) {
-
-        actualizarEstado(
-            'Permiso de cámara denegado o cámara no disponible.',
-            true
-        );
+    mensaje.onerror = (error) => {
 
         console.error(
-            'No se pudo acceder a la cámara:',
+            "Error en TTS:",
             error
         );
+
+        volverAEspera();
+
+    };
+
+    window.speechSynthesis.speak(mensaje);
+}
+
+
+// =====================================================
+// VIDEO HABLANDO
+// =====================================================
+
+function cambiarRobotHablar() {
+
+    if (!robotVideo) {
+        return;
+    }
+
+    const rutaActual =
+        robotVideo.getAttribute("src");
+
+    if (rutaActual === "/videos/hablando.mp4") {
+        return;
+    }
+
+    robotVideo.src =
+        "/videos/hablando.mp4";
+
+    robotVideo.loop = true;
+
+    robotVideo.play().catch(error => {
+
+        console.warn(
+            "No se pudo reproducir hablando.mp4:",
+            error
+        );
+
+    });
+}
+
+
+// =====================================================
+// VIDEO ESPERA
+// =====================================================
+
+function volverAEspera() {
+
+    if (robotVideo) {
+
+        robotVideo.src =
+            "/videos/espera.mp4";
+
+        robotVideo.loop = true;
+
+        robotVideo.play().catch(error => {
+
+            console.warn(
+                "No se pudo reproducir espera.mp4:",
+                error
+            );
+
+        });
+    }
+
+    esperandoHablar = false;
+
+    console.log(
+        "Robot volvió al estado de espera."
+    );
+}
+
+
+// =====================================================
+// BUCLE DE ANÁLISIS
+// =====================================================
+
+async function cicloAnalisis() {
+
+    while (flujoCamara) {
+
+        if (!esperandoHablar) {
+
+            await analizarCamara();
+
+        }
+
+        await esperar(5000);
     }
 }
 
 
-// ======================================================
-// LIMPIEZA
-// ======================================================
+function esperar(ms) {
 
-window.addEventListener(
-    'pagehide',
-    () => {
+    return new Promise(resolve => {
 
-        if (
-            'speechSynthesis' in window
-        ) {
-            window.speechSynthesis.cancel();
-        }
+        setTimeout(resolve, ms);
 
-        if (temporizadorHabla) {
-            clearTimeout(
-                temporizadorHabla
-            );
-        }
+    });
+}
 
-        if (intervaloAnalisis) {
-            clearInterval(
-                intervaloAnalisis
-            );
-        }
 
-        if (flujoCamara) {
+function iniciarAnalisis() {
 
-            flujoCamara
-                .getTracks()
-                .forEach(
-                    track => track.stop()
-                );
-        }
+    cicloAnalisis();
+
+}
+
+
+// =====================================================
+// DETENER CÁMARA
+// =====================================================
+
+function detenerCamara() {
+
+    if (flujoCamara) {
+
+        flujoCamara
+            .getTracks()
+            .forEach(track => track.stop());
+
+        flujoCamara = null;
     }
-);
+
+}
 
 
-// ======================================================
-// ARRANCAR
-// ======================================================
+// =====================================================
+// INICIAR
+// =====================================================
 
-iniciarPrograma();
+iniciarCamara();
