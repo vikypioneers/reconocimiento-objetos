@@ -4,23 +4,35 @@ import time
 import cv2
 import numpy as np
 
-from flask import Flask, render_template, request, jsonify, send_from_directory
-from ultralytics import YOLO
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_from_directory
+)
 
 
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    template_folder=BASE_DIR,
+    static_folder=os.path.join(BASE_DIR, "static"),
+    static_url_path="/static"
+)
 
 modelo = None
 
 
 # ============================================================
-# CARGAR MODELO SOLO CUANDO SEA NECESARIO
+# CARGAR YOLO SOLAMENTE CUANDO SE NECESITE
 # ============================================================
 
 def obtener_modelo():
@@ -30,43 +42,70 @@ def obtener_modelo():
     if modelo is not None:
         return modelo
 
-    ruta_modelo = os.path.join(
-        BASE_DIR,
-        "yolo11n.pt"
-    )
+    try:
 
-    if not os.path.exists(ruta_modelo):
+        # Importación tardía.
+        # Así la página principal puede abrir aunque YOLO
+        # todavía no haya sido cargado.
+        from ultralytics import YOLO
 
-        raise FileNotFoundError(
-            f"No existe yolo11n.pt en {ruta_modelo}"
+        ruta_modelo = os.path.join(
+            BASE_DIR,
+            "yolo11n.pt"
         )
 
-    app.logger.info(
-        "Cargando YOLO desde %s",
-        ruta_modelo
-    )
+        if not os.path.isfile(ruta_modelo):
 
-    modelo = YOLO(ruta_modelo)
+            raise FileNotFoundError(
+                f"No se encontró yolo11n.pt en: {ruta_modelo}"
+            )
 
-    app.logger.info(
-        "YOLO cargado correctamente"
-    )
+        app.logger.info(
+            "Cargando modelo YOLO: %s",
+            ruta_modelo
+        )
 
-    return modelo
+        modelo = YOLO(ruta_modelo)
+
+        app.logger.info(
+            "Modelo YOLO cargado correctamente."
+        )
+
+        return modelo
+
+    except Exception as error:
+
+        app.logger.exception(
+            "No se pudo cargar YOLO."
+        )
+
+        raise error
 
 
 # ============================================================
-# INICIO
+# PÁGINA PRINCIPAL
 # ============================================================
 
 @app.route("/")
 def inicio():
 
+    ruta_index = os.path.join(
+        BASE_DIR,
+        "index.html"
+    )
+
+    if not os.path.isfile(ruta_index):
+
+        return (
+            "ERROR: No se encontró index.html en la raíz del proyecto.",
+            500
+        )
+
     return render_template("index.html")
 
 
 # ============================================================
-# HEALTH
+# HEALTH CHECK
 # ============================================================
 
 @app.route("/health")
@@ -79,20 +118,21 @@ def health():
 
 
 # ============================================================
-# VIDEOS
+# SERVIR VIDEOS
 # ============================================================
 
 @app.route("/videos/<path:nombre>")
 def servir_video(nombre):
 
-    ruta = os.path.join(
+    ruta_video = os.path.join(
         BASE_DIR,
         nombre
     )
 
-    if not os.path.isfile(ruta):
+    if not os.path.isfile(ruta_video):
 
         return jsonify({
+            "success": False,
             "error": "Video no encontrado",
             "archivo": nombre
         }), 404
@@ -104,18 +144,18 @@ def servir_video(nombre):
 
 
 # ============================================================
-# DETECTAR
+# DETECCIÓN DE OBJETOS
 # ============================================================
 
 @app.route("/detectar", methods=["POST"])
 def detectar():
 
-    inicio = time.time()
+    tiempo_inicio = time.time()
 
     try:
 
         # ----------------------------------------------------
-        # FRAME
+        # COMPROBAR FRAME
         # ----------------------------------------------------
 
         if "frame" not in request.files:
@@ -123,7 +163,7 @@ def detectar():
             return jsonify({
                 "success": False,
                 "detected": False,
-                "error": "No se recibió frame"
+                "error": "No se recibió ningún frame."
             }), 400
 
         archivo = request.files["frame"]
@@ -135,11 +175,11 @@ def detectar():
             return jsonify({
                 "success": False,
                 "detected": False,
-                "error": "Frame vacío"
+                "error": "El frame recibido está vacío."
             }), 400
 
         # ----------------------------------------------------
-        # CONVERTIR IMAGEN
+        # CONVERTIR FRAME
         # ----------------------------------------------------
 
         array = np.frombuffer(
@@ -157,7 +197,7 @@ def detectar():
             return jsonify({
                 "success": False,
                 "detected": False,
-                "error": "Imagen inválida"
+                "error": "No se pudo interpretar la imagen."
             }), 400
 
         # ----------------------------------------------------
@@ -193,13 +233,13 @@ def detectar():
             )
 
         # ----------------------------------------------------
-        # MODELO
+        # OBTENER MODELO
         # ----------------------------------------------------
 
         modelo_local = obtener_modelo()
 
         # ----------------------------------------------------
-        # YOLO
+        # REALIZAR DETECCIÓN
         # ----------------------------------------------------
 
         resultados = modelo_local.predict(
@@ -216,10 +256,10 @@ def detectar():
         )
 
         # ----------------------------------------------------
-        # BUSCAR MEJOR DETECCIÓN
+        # BUSCAR OBJETO CON MAYOR CONFIANZA
         # ----------------------------------------------------
 
-        objeto = None
+        objeto_original = None
 
         confianza_maxima = 0.0
 
@@ -241,76 +281,205 @@ def detectar():
                             caja.cls[0]
                         )
 
-                        nombre = modelo_local.names.get(
-                            clase,
-                            str(clase)
-                        )
+                        nombres = modelo_local.names
 
-                        objeto = nombre
+                        if isinstance(
+                            nombres,
+                            dict
+                        ):
+
+                            nombre = nombres.get(
+                                clase,
+                                str(clase)
+                            )
+
+                        else:
+
+                            nombre = nombres[clase]
+
+                        objeto_original = nombre
 
                         confianza_maxima = confianza
 
         # ----------------------------------------------------
-        # TRADUCCIONES
+        # TRADUCCIONES AL ESPAÑOL
         # ----------------------------------------------------
 
         traducciones = {
 
             "person": "persona",
+
             "bicycle": "bicicleta",
+
             "car": "carro",
+
             "motorcycle": "motocicleta",
+
+            "airplane": "avión",
+
             "bus": "autobús",
+
             "train": "tren",
+
             "truck": "camión",
+
             "boat": "barco",
 
+            "traffic light": "semáforo",
+
+            "fire hydrant": "hidrante",
+
+            "stop sign": "señal de pare",
+
+            "parking meter": "parquímetro",
+
+            "bench": "banca",
+
             "bird": "pájaro",
+
             "cat": "gato",
+
             "dog": "perro",
+
             "horse": "caballo",
+
             "sheep": "oveja",
+
             "cow": "vaca",
 
+            "elephant": "elefante",
+
+            "bear": "oso",
+
+            "zebra": "cebra",
+
+            "giraffe": "jirafa",
+
             "backpack": "mochila",
+
             "umbrella": "paraguas",
+
             "handbag": "bolso",
+
+            "tie": "corbata",
+
             "suitcase": "maleta",
 
+            "frisbee": "frisbee",
+
+            "skis": "esquís",
+
+            "snowboard": "tabla de snowboard",
+
+            "sports ball": "pelota",
+
+            "kite": "cometa",
+
+            "baseball bat": "bate de béisbol",
+
+            "baseball glove": "guante de béisbol",
+
+            "skateboard": "patineta",
+
+            "surfboard": "tabla de surf",
+
+            "tennis racket": "raqueta de tenis",
+
             "bottle": "botella",
+
+            "wine glass": "copa",
+
             "cup": "taza",
+
             "fork": "tenedor",
+
             "knife": "cuchillo",
+
             "spoon": "cuchara",
 
+            "bowl": "tazón",
+
             "banana": "banano",
+
             "apple": "manzana",
+
+            "sandwich": "sándwich",
+
             "orange": "naranja",
+
+            "broccoli": "brócoli",
+
+            "carrot": "zanahoria",
+
+            "hot dog": "perro caliente",
+
             "pizza": "pizza",
+
+            "donut": "dona",
+
             "cake": "pastel",
 
             "chair": "silla",
+
             "couch": "sofá",
+
+            "potted plant": "planta",
+
             "bed": "cama",
+
             "dining table": "mesa",
 
+            "toilet": "inodoro",
+
             "tv": "televisor",
+
             "laptop": "computador",
+
             "mouse": "ratón",
+
+            "remote": "control remoto",
+
             "keyboard": "teclado",
+
             "cell phone": "teléfono",
 
+            "microwave": "microondas",
+
+            "oven": "horno",
+
+            "toaster": "tostadora",
+
+            "sink": "lavamanos",
+
+            "refrigerator": "nevera",
+
             "book": "libro",
-            "clock": "reloj"
+
+            "clock": "reloj",
+
+            "vase": "florero",
+
+            "scissors": "tijeras",
+
+            "teddy bear": "oso de peluche",
+
+            "hair drier": "secador",
+
+            "toothbrush": "cepillo de dientes"
         }
 
-        if objeto:
+        # ----------------------------------------------------
+        # TRADUCIR
+        # ----------------------------------------------------
 
-            objeto =
-                traducciones.get(
-                    objeto.lower(),
-                    objeto
-                )
+        objeto = None
+
+        if objeto_original:
+
+            objeto = traducciones.get(
+                objeto_original.lower(),
+                objeto_original
+            )
 
         # ----------------------------------------------------
         # SIN DETECCIÓN
@@ -332,27 +501,40 @@ def detectar():
 
                 "processing_time":
                     round(
-                        time.time() - inicio,
+                        time.time() - tiempo_inicio,
                         3
                     )
             })
 
         # ----------------------------------------------------
-        # TEXTO
+        # ARTÍCULOS
         # ----------------------------------------------------
 
         objetos_femeninos = {
+
             "persona",
             "bicicleta",
             "motocicleta",
-            "botella",
-            "taza",
+            "avión",
+            "señal de pare",
+            "banca",
             "mochila",
             "maleta",
+            "botella",
+            "copa",
+            "taza",
+            "cuchara",
+            "manzana",
+            "naranja",
+            "zanahoria",
+            "pizza",
             "silla",
             "mesa",
-            "manzana",
-            "naranja"
+            "planta",
+            "cama",
+            "nevera",
+            "raqueta de tenis",
+            "pelota"
         }
 
         articulo = (
@@ -361,25 +543,33 @@ def detectar():
             else "un"
         )
 
+        # ----------------------------------------------------
+        # FRASE
+        # ----------------------------------------------------
+
         texto = (
             f"He detectado {articulo} {objeto}."
         )
 
         # ----------------------------------------------------
-        # RESPUESTA
+        # TIEMPO
         # ----------------------------------------------------
 
-        tiempo = round(
-            time.time() - inicio,
+        tiempo_procesamiento = round(
+            time.time() - tiempo_inicio,
             3
         )
 
         app.logger.info(
-            "Detectado %s | confianza %.2f | %.2fs",
+            "Objeto detectado: %s | confianza: %.2f | tiempo: %.2fs",
             objeto,
             confianza_maxima,
-            tiempo
+            tiempo_procesamiento
         )
+
+        # ----------------------------------------------------
+        # RESPUESTA
+        # ----------------------------------------------------
 
         return jsonify({
 
@@ -397,7 +587,8 @@ def detectar():
 
             "text": texto,
 
-            "processing_time": tiempo
+            "processing_time":
+                tiempo_procesamiento
         })
 
     except Exception as error:
@@ -412,27 +603,32 @@ def detectar():
 
             "detected": False,
 
-            "error":
-                "Error procesando la detección",
+            "error": "Error procesando la detección.",
 
-            "detail":
-                str(error)
+            "detail": str(error)
 
         }), 500
 
 
 # ============================================================
-# ERRORES
+# ERROR 404
 # ============================================================
 
 @app.errorhandler(404)
 def error_404(error):
 
     return jsonify({
+
         "success": False,
-        "error": "Ruta no encontrada"
+
+        "error": "Ruta no encontrada."
+
     }), 404
 
+
+# ============================================================
+# ERROR 500
+# ============================================================
 
 @app.errorhandler(500)
 def error_500(error):
@@ -442,8 +638,11 @@ def error_500(error):
     )
 
     return jsonify({
+
         "success": False,
-        "error": "Error interno del servidor"
+
+        "error": "Error interno del servidor."
+
     }), 500
 
 
