@@ -1,21 +1,114 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
+
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#102a43">
-    <title>Detector Inteligente</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Reconocimiento de Objetos</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/style.css') }}"
+    >
+
 </head>
+
+
 <body>
-<video
-    id="camera"
-    autoplay
-    muted
-    playsinline>
-</video>
-    <canvas id="canvas" style="display:none;"></canvas>
-    <p id="estado" class="status" role="status">Iniciando cámara...</p>
-    <script src="/static/js/camera.js"></script>
+
+
+    <!-- =====================================================
+         VIDEO DEL ROBOT
+         ===================================================== -->
+
+    <div
+        id="pantallaRobot"
+        class="pantalla-robot"
+    >
+
+        <video
+            id="robotVideo"
+            class="robot-video"
+            src="/videos/espera.mp4"
+            autoplay
+            muted
+            loop
+            playsinline
+        ></video>
+
+
+        <!-- =================================================
+             INFORMACIÓN
+             ================================================= -->
+
+        <div
+            id="informacion"
+            class="informacion"
+        >
+
+            <div
+                id="estado"
+                class="estado"
+            >
+                Observando...
+            </div>
+
+
+            <div
+                id="objetoDetectado"
+                class="objeto-detectado"
+            ></div>
+
+        </div>
+
+
+        <!-- =================================================
+             CÁMARA
+             ================================================= -->
+
+        <video
+            id="camera"
+            autoplay
+            muted
+            playsinline
+        ></video>
+
+
+        <canvas
+            id="canvas"
+        ></canvas>
+
+
+        <!-- =================================================
+             BOTÓN PANTALLA COMPLETA
+             ================================================= -->
+
+        <button
+            id="botonPantallaCompleta"
+            class="boton-pantalla-completa"
+            onclick="pantallaCompleta()"
+            type="button"
+        >
+            ⛶
+        </button>
+
+    </div>
+
+
+    <!-- =====================================================
+         JAVASCRIPT
+         ===================================================== -->
+
+    <script
+        src="{{ url_for('static', filename='js/camera.js') }}"
+    ></script>
+
 </body>
+
 </html>
