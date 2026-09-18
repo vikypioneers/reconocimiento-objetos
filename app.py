@@ -6,7 +6,58 @@ import time
 import numpy as np
 from flask import Flask, jsonify, request, send_file, render_template_string
 from ultralytics import YOLO
+modelo = None
+modelo_error = None
+def obtener_modelo():
 
+    global modelo
+    global modelo_error
+
+    if modelo is not None:
+        return modelo
+
+    if modelo_error is not None:
+        raise RuntimeError(
+            "El modelo YOLO no pudo cargarse."
+        )
+
+    try:
+
+        ruta_modelo = os.path.join(
+            BASE_DIR,
+            "yolo11n.pt"
+        )
+
+        if not os.path.exists(ruta_modelo):
+
+            raise FileNotFoundError(
+                f"No existe el modelo: {ruta_modelo}"
+            )
+
+        app.logger.info(
+            "Cargando modelo YOLO..."
+        )
+
+        modelo = YOLO(
+            ruta_modelo
+        )
+
+        app.logger.info(
+            "Modelo YOLO cargado correctamente."
+        )
+
+        return modelo
+
+    except Exception as error:
+
+        modelo_error = error
+
+        app.logger.exception(
+            "Error cargando YOLO"
+        )
+
+        raise
+      
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
@@ -511,7 +562,13 @@ def servir_video(nombre_video):
 @app.get("/static/<nombre_video>")
 def servir_video_compatibilidad(nombre_video):
     return servir_video(nombre_video)
+@app.get("/health")
+def health():
 
+    return jsonify({
+        "status": "ok",
+        "modelo_cargado": modelo is not None
+    })
 
 # =====================================================================
 # 5. DETECCIÓN DE FOTOGRAMAS ENVIADOS POR EL NAVEGADOR
@@ -519,8 +576,7 @@ def servir_video_compatibilidad(nombre_video):
 def analizar_frame(frame_camara):
     global modelo, primera_deteccion_global
 
-    if modelo is None:
-        modelo = YOLO(os.path.join(BASE_DIR, "yolo11n.pt"))
+    modelo_local = obtener_modelo()
 
     alto_original, ancho_original = frame_camara.shape[:2]
     lado_mayor = max(alto_original, ancho_original)
@@ -532,7 +588,12 @@ def analizar_frame(frame_camara):
             interpolation=cv2.INTER_AREA,
         )
 
-    results = modelo(frame_camara, imgsz=256, conf=0.45, verbose=False)
+    results = modelo_local(
+    frame_camara,
+    imgsz=256,
+    conf=0.45,
+    verbose=False
+    )
     alto_frame, ancho_frame = frame_camara.shape[:2]
     area_total = alto_frame * ancho_frame
     detecciones = []
@@ -541,7 +602,7 @@ def analizar_frame(frame_camara):
         for box in result.boxes:
             confianza = float(box.conf[0])
             id_clase = int(box.cls[0])
-            nombre_ingles = modelo.names[id_clase]
+            nombre_ingles = modelo_local.names[id_clase]
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             detecciones.append({
                 "objeto": nombre_ingles,
@@ -568,9 +629,7 @@ def analizar_frame(frame_camara):
         if objeto_registrado != obj_ingles:
             del objetos_registrados[objeto_registrado]
 
-    puede_anunciar = (
-        tiempo_actual - registro["inicio"] >= 3.0 and not registro["anunciado"]
-    )
+    puede_anunciar = not registro["anunciado"]
     x1, y1, x2, y2 = deteccion["box"]
     corte_objeto = frame_camara[max(0, y1):min(alto_frame, y2), max(0, x1):min(ancho_frame, x2)]
     color_detectado = obtener_color_dominante(corte_objeto)
