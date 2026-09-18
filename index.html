@@ -8,9 +8,13 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <video id="video-robot" class="robot-video" autoplay muted playsinline loop aria-hidden="true"></video>
-    <video id="camara" autoplay muted playsinline hidden></video>
-    <canvas id="captura" hidden></canvas>
+<video
+    id="camera"
+    autoplay
+    muted
+    playsinline>
+</video>
+    <canvas id="canvas" style="display:none;"></canvas>
     <p id="estado" class="status" role="status">Iniciando cámara...</p>
     <script src="/static/js/camera.js"></script>
 </body>
