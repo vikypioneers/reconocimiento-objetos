@@ -1,58 +1,188 @@
-const video = document.getElementById("camera");
+// ============================================================
+// RECONOCIMIENTO DE OBJETOS - MR.MIND
+// ============================================================
+
+const camera = document.getElementById("camera");
 const canvas = document.getElementById("canvas");
 const robotVideo = document.getElementById("robotVideo");
 
-let flujoCamara = null;
+
+// ============================================================
+// VARIABLES
+// ============================================================
+
+let stream = null;
+
+let analizando = false;
 
 let esperandoHablar = false;
-let analisisEnCurso = false;
+
+let objetoPendiente = null;
 
 let ultimoObjeto = null;
-let ultimoTiempoDeteccion = 0;
+
+let ultimoTiempo = 0;
+
+let vozDisponible = false;
 
 
-// =====================================================
+// ============================================================
+// INICIAR
+// ============================================================
+
+document.addEventListener("DOMContentLoaded", () => {
+
+    iniciarCamara();
+
+    cargarVoces();
+
+    if ("speechSynthesis" in window) {
+
+        window.speechSynthesis.onvoiceschanged =
+            cargarVoces;
+    }
+
+});
+
+
+// ============================================================
+// CARGAR VOCES
+// ============================================================
+
+function cargarVoces() {
+
+    if (!("speechSynthesis" in window)) {
+        return;
+    }
+
+    const voces =
+        window.speechSynthesis.getVoices();
+
+    if (voces.length > 0) {
+
+        vozDisponible = true;
+
+        console.log(
+            "Voces disponibles:",
+            voces.length
+        );
+    }
+}
+
+
+// ============================================================
 // INICIAR CÁMARA
-// =====================================================
+// ============================================================
 
 async function iniciarCamara() {
 
     try {
 
-        flujoCamara = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: "user",
-                width: {
-                    ideal: 480
+        stream =
+            await navigator.mediaDevices.getUserMedia({
+
+                video: {
+                    facingMode: "user",
+                    width: {
+                        ideal: 480
+                    },
+                    height: {
+                        ideal: 360
+                    }
                 },
-                height: {
-                    ideal: 360
-                }
-            },
-            audio: false
-        });
 
-        video.srcObject = flujoCamara;
+                audio: false
 
-        console.log("Cámara iniciada correctamente.");
+            });
 
-        iniciarAnalisis();
+        camera.srcObject = stream;
 
-    } catch (error) {
+        await camera.play();
 
-        console.error("No se pudo iniciar la cámara:", error);
+        console.log(
+            "Cámara iniciada correctamente."
+        );
+
+        // Esperar a que la cámara tenga dimensiones.
+        esperarVideo();
 
     }
+
+    catch (error) {
+
+        console.error(
+            "Error iniciando la cámara:",
+            error
+        );
+
+    }
+
 }
 
 
-// =====================================================
-// ANALIZAR CÁMARA
-// =====================================================
+// ============================================================
+// ESPERAR A QUE EL VIDEO DE CÁMARA ESTÉ LISTO
+// ============================================================
 
-async function analizarCamara() {
+function esperarVideo() {
 
-    if (analisisEnCurso) {
+    if (
+        camera.videoWidth > 0 &&
+        camera.videoHeight > 0
+    ) {
+
+        console.log(
+            "Cámara lista:",
+            camera.videoWidth,
+            "x",
+            camera.videoHeight
+        );
+
+        iniciarCicloReconocimiento();
+
+        return;
+    }
+
+    setTimeout(
+        esperarVideo,
+        500
+    );
+
+}
+
+
+// ============================================================
+// CICLO DE RECONOCIMIENTO
+// ============================================================
+
+async function iniciarCicloReconocimiento() {
+
+    while (stream) {
+
+        if (
+            !analizando &&
+            !esperandoHablar
+        ) {
+
+            await analizarObjeto();
+
+        }
+
+        // No saturar el servidor.
+        await esperar(4000);
+
+    }
+
+}
+
+
+// ============================================================
+// ANALIZAR OBJETO
+// ============================================================
+
+async function analizarObjeto() {
+
+    if (analizando) {
         return;
     }
 
@@ -60,156 +190,246 @@ async function analizarCamara() {
         return;
     }
 
-    if (!video.videoWidth || !video.videoHeight) {
+    if (
+        !camera.videoWidth ||
+        !camera.videoHeight
+    ) {
+
         return;
     }
 
-    analisisEnCurso = true;
+    analizando = true;
 
     try {
 
-        // ---------------------------------------------
-        // Tamaño reducido para ahorrar memoria
-        // ---------------------------------------------
+        // ====================================================
+        // PREPARAR CANVAS
+        // ====================================================
 
-        const ancho = 480;
-
-        const escala = ancho / video.videoWidth;
-
-        canvas.width = ancho;
-        canvas.height = Math.round(
-            video.videoHeight * escala
-        );
-
-        const contexto = canvas.getContext("2d");
-
-        contexto.drawImage(
-            video,
-            0,
-            0,
-            canvas.width,
-            canvas.height
-        );
-
-        // ---------------------------------------------
-        // Convertir frame a JPEG
-        // ---------------------------------------------
-
-        const blob = await new Promise(resolve => {
-
-            canvas.toBlob(
-                resolve,
-                "image/jpeg",
-                0.65
+        const ancho =
+            Math.min(
+                camera.videoWidth,
+                480
             );
 
-        });
+        const escala =
+            ancho /
+            camera.videoWidth;
 
-        if (!blob) {
+        const alto =
+            Math.round(
+                camera.videoHeight *
+                escala
+            );
+
+        canvas.width = ancho;
+
+        canvas.height = alto;
+
+        const contexto =
+            canvas.getContext("2d");
+
+        contexto.drawImage(
+            camera,
+            0,
+            0,
+            ancho,
+            alto
+        );
+
+
+        // ====================================================
+        // CONVERTIR A JPEG
+        // ====================================================
+
+        const imagen =
+            await new Promise(
+                resolve => {
+
+                    canvas.toBlob(
+                        resolve,
+                        "image/jpeg",
+                        0.65
+                    );
+
+                }
+            );
+
+
+        if (!imagen) {
+
+            console.error(
+                "No se pudo crear la imagen."
+            );
+
             return;
         }
 
-        // ---------------------------------------------
-        // Enviar al servidor
-        // ---------------------------------------------
 
-        const datos = new FormData();
+        // ====================================================
+        // FORM DATA
+        // ====================================================
 
-        datos.append(
+        const formData =
+            new FormData();
+
+        formData.append(
             "frame",
-            blob,
-            "frame.jpg"
+            imagen,
+            "camera.jpg"
         );
 
-        const respuesta = await fetch(
-            "/detectar",
-            {
-                method: "POST",
-                body: datos
-            }
-        );
 
-        // ---------------------------------------------
-        // Evitar error Unexpected token <
-        // ---------------------------------------------
+        // ====================================================
+        // ENVIAR AL SERVIDOR
+        // ====================================================
+
+        const respuesta =
+            await fetch(
+                "/detectar",
+                {
+                    method: "POST",
+                    body: formData
+                }
+            );
+
+
+        // ====================================================
+        // COMPROBAR RESPUESTA
+        // ====================================================
 
         if (!respuesta.ok) {
 
-            const textoError = await respuesta.text();
+            const errorTexto =
+                await respuesta.text();
 
             console.error(
-                "Error del servidor:",
+                "Error /detectar:",
                 respuesta.status,
-                textoError
+                errorTexto
             );
 
             return;
         }
 
-        const resultado = await respuesta.json();
 
-        console.log("Resultado:", resultado);
+        const resultado =
+            await respuesta.json();
+
+
+        console.log(
+            "Detección:",
+            resultado
+        );
+
+
+        // ====================================================
+        // COMPROBAR RESULTADO
+        // ====================================================
 
         if (!resultado.success) {
+
+            console.error(
+                "Error del servidor:",
+                resultado.error
+            );
+
             return;
         }
+
 
         if (!resultado.detected) {
+
             return;
         }
 
-        const objeto = resultado.object;
-        const texto = resultado.text;
+
+        const objeto =
+            resultado.object;
+
+        const texto =
+            resultado.text;
+
 
         if (!objeto || !texto) {
+
             return;
         }
 
-        // ---------------------------------------------
-        // Evitar hablar repetidamente del mismo objeto
-        // ---------------------------------------------
 
-        const ahora = Date.now();
+        // ====================================================
+        // EVITAR REPETICIONES
+        // ====================================================
+
+        const ahora =
+            Date.now();
 
         const mismoObjeto =
             objeto === ultimoObjeto;
 
-        const muyReciente =
-            ahora - ultimoTiempoDeteccion < 10000;
+        const hanPasadoDiezSegundos =
+            ahora - ultimoTiempo >
+            10000;
 
-        if (mismoObjeto && muyReciente) {
+
+        if (
+            mismoObjeto &&
+            !hanPasadoDiezSegundos
+        ) {
+
+            console.log(
+                "Objeto repetido:",
+                objeto
+            );
+
             return;
         }
 
-        ultimoObjeto = objeto;
-        ultimoTiempoDeteccion = ahora;
 
-        // ---------------------------------------------
-        // Esperar 5 segundos y hablar
-        // ---------------------------------------------
+        ultimoObjeto =
+            objeto;
 
-        programarHabla(texto, objeto);
+        ultimoTiempo =
+            ahora;
 
-    } catch (error) {
+
+        // ====================================================
+        // PROGRAMAR HABLA
+        // ====================================================
+
+        programarHabla(
+            objeto,
+            texto
+        );
+
+    }
+
+    catch (error) {
 
         console.error(
             "Error analizando la cámara:",
             error
         );
 
-    } finally {
+    }
 
-        analisisEnCurso = false;
+    finally {
+
+        analizando = false;
 
     }
+
 }
 
 
-// =====================================================
+// ============================================================
 // ESPERAR 5 SEGUNDOS
-// =====================================================
+// ============================================================
 
-function programarHabla(texto, objeto) {
+function programarHabla(
+    objeto,
+    texto
+) {
 
     if (esperandoHablar) {
         return;
@@ -217,32 +437,80 @@ function programarHabla(texto, objeto) {
 
     esperandoHablar = true;
 
+    objetoPendiente =
+        objeto;
+
+
     console.log(
-        `Objeto detectado: ${objeto}.`
+        "Objeto detectado:",
+        objeto
     );
 
     console.log(
-        "Esperando 5 segundos antes de hablar..."
+        "Esperando 5 segundos..."
     );
 
-    setTimeout(() => {
 
-        hablar(texto);
+    // ========================================================
+    // OPCIONAL: MOSTRAR OBJETO EN PANTALLA
+    // ========================================================
 
-    }, 5000);
+    mostrarObjeto(
+        objeto
+    );
+
+
+    setTimeout(
+        () => {
+
+            hablar(
+                texto
+            );
+
+        },
+        5000
+    );
+
 }
 
 
-// =====================================================
-// TEXTO A VOZ
-// =====================================================
+// ============================================================
+// MOSTRAR OBJETO
+// ============================================================
 
-function hablar(texto) {
+function mostrarObjeto(
+    objeto
+) {
 
-    if (!("speechSynthesis" in window)) {
+    const elemento =
+        document.getElementById(
+            "objetoDetectado"
+        );
+
+    if (!elemento) {
+        return;
+    }
+
+    elemento.textContent =
+        objeto;
+
+}
+
+
+// ============================================================
+// HABLAR
+// ============================================================
+
+function hablar(
+    texto
+) {
+
+    if (
+        !("speechSynthesis" in window)
+    ) {
 
         console.error(
-            "El navegador no soporta síntesis de voz."
+            "El navegador no soporta texto a voz."
         );
 
         volverAEspera();
@@ -250,173 +518,320 @@ function hablar(texto) {
         return;
     }
 
+
+    // Cancelar cualquier voz anterior.
     window.speechSynthesis.cancel();
 
+
+    // ========================================================
+    // CAMBIAR VIDEO
+    // ========================================================
+
+    cambiarAVideoHablando();
+
+
+    // ========================================================
+    // CREAR MENSAJE
+    // ========================================================
+
     const mensaje =
-        new SpeechSynthesisUtterance(texto);
-
-    mensaje.lang = "es-ES";
-    mensaje.rate = 0.95;
-    mensaje.pitch = 1;
-    mensaje.volume = 1;
-
-    // ---------------------------------------------
-    // Cambiar robot a hablando
-    // ---------------------------------------------
-
-    cambiarRobotHablar();
-
-    mensaje.onstart = () => {
-
-        console.log("Robot hablando...");
-
-        cambiarRobotHablar();
-
-    };
-
-    mensaje.onend = () => {
-
-        console.log("Robot terminó de hablar.");
-
-        volverAEspera();
-
-    };
-
-    mensaje.onerror = (error) => {
-
-        console.error(
-            "Error en TTS:",
-            error
+        new SpeechSynthesisUtterance(
+            texto
         );
 
-        volverAEspera();
 
-    };
+    mensaje.lang =
+        "es-ES";
 
-    window.speechSynthesis.speak(mensaje);
+    mensaje.rate =
+        0.95;
+
+    mensaje.pitch =
+        1;
+
+    mensaje.volume =
+        1;
+
+
+    // ========================================================
+    // BUSCAR VOZ EN ESPAÑOL
+    // ========================================================
+
+    const voces =
+        window.speechSynthesis
+            .getVoices();
+
+
+    const vozEspanol =
+        voces.find(
+            voz =>
+                voz.lang
+                    .toLowerCase()
+                    .startsWith("es")
+        );
+
+
+    if (vozEspanol) {
+
+        mensaje.voice =
+            vozEspanol;
+
+    }
+
+
+    // ========================================================
+    // CUANDO COMIENZA A HABLAR
+    // ========================================================
+
+    mensaje.onstart =
+        () => {
+
+            console.log(
+                "Robot hablando:",
+                texto
+            );
+
+            cambiarAVideoHablando();
+
+        };
+
+
+    // ========================================================
+    // CUANDO TERMINA
+    // ========================================================
+
+    mensaje.onend =
+        () => {
+
+            console.log(
+                "Robot terminó de hablar."
+            );
+
+            volverAEspera();
+
+        };
+
+
+    // ========================================================
+    // ERROR
+    // ========================================================
+
+    mensaje.onerror =
+        error => {
+
+            console.error(
+                "Error TTS:",
+                error
+            );
+
+            volverAEspera();
+
+        };
+
+
+    // ========================================================
+    // HABLAR
+    // ========================================================
+
+    window.speechSynthesis.speak(
+        mensaje
+    );
+
 }
 
 
-// =====================================================
+// ============================================================
 // VIDEO HABLANDO
-// =====================================================
+// ============================================================
 
-function cambiarRobotHablar() {
+function cambiarAVideoHablando() {
 
     if (!robotVideo) {
         return;
     }
 
-    const rutaActual =
-        robotVideo.getAttribute("src");
 
-    if (rutaActual === "/videos/hablando.mp4") {
-        return;
-    }
+    robotVideo.pause();
+
 
     robotVideo.src =
         "/videos/hablando.mp4";
 
-    robotVideo.loop = true;
 
-    robotVideo.play().catch(error => {
+    robotVideo.loop =
+        true;
 
-        console.warn(
-            "No se pudo reproducir hablando.mp4:",
-            error
+
+    robotVideo.muted =
+        true;
+
+
+    robotVideo.load();
+
+
+    const promesa =
+        robotVideo.play();
+
+
+    if (promesa) {
+
+        promesa.catch(
+            error => {
+
+                console.warn(
+                    "No se pudo reproducir hablando.mp4:",
+                    error
+                );
+
+            }
         );
 
-    });
+    }
+
 }
 
 
-// =====================================================
+// ============================================================
 // VIDEO ESPERA
-// =====================================================
+// ============================================================
 
 function volverAEspera() {
 
     if (robotVideo) {
 
+        robotVideo.pause();
+
+
         robotVideo.src =
             "/videos/espera.mp4";
 
-        robotVideo.loop = true;
 
-        robotVideo.play().catch(error => {
+        robotVideo.loop =
+            true;
 
-            console.warn(
-                "No se pudo reproducir espera.mp4:",
-                error
+
+        robotVideo.muted =
+            true;
+
+
+        robotVideo.load();
+
+
+        const promesa =
+            robotVideo.play();
+
+
+        if (promesa) {
+
+            promesa.catch(
+                error => {
+
+                    console.warn(
+                        "No se pudo reproducir espera.mp4:",
+                        error
+                    );
+
+                }
             );
-
-        });
-    }
-
-    esperandoHablar = false;
-
-    console.log(
-        "Robot volvió al estado de espera."
-    );
-}
-
-
-// =====================================================
-// BUCLE DE ANÁLISIS
-// =====================================================
-
-async function cicloAnalisis() {
-
-    while (flujoCamara) {
-
-        if (!esperandoHablar) {
-
-            await analizarCamara();
 
         }
 
-        await esperar(5000);
     }
-}
 
 
-function esperar(ms) {
+    esperandoHablar =
+        false;
 
-    return new Promise(resolve => {
-
-        setTimeout(resolve, ms);
-
-    });
-}
+    objetoPendiente =
+        null;
 
 
-function iniciarAnalisis() {
-
-    cicloAnalisis();
+    console.log(
+        "Robot volvió a espera."
+    );
 
 }
 
 
-// =====================================================
+// ============================================================
+// FUNCIÓN ESPERA
+// ============================================================
+
+function esperar(
+    milisegundos
+) {
+
+    return new Promise(
+        resolve =>
+            setTimeout(
+                resolve,
+                milisegundos
+            )
+    );
+
+}
+
+
+// ============================================================
 // DETENER CÁMARA
-// =====================================================
+// ============================================================
 
 function detenerCamara() {
 
-    if (flujoCamara) {
-
-        flujoCamara
-            .getTracks()
-            .forEach(track => track.stop());
-
-        flujoCamara = null;
+    if (!stream) {
+        return;
     }
+
+
+    stream
+        .getTracks()
+        .forEach(
+            track =>
+                track.stop()
+        );
+
+
+    stream =
+        null;
 
 }
 
 
-// =====================================================
-// INICIAR
-// =====================================================
+// ============================================================
+// PANTALLA COMPLETA
+// ============================================================
 
-iniciarCamara();
+async function pantallaCompleta() {
+
+    try {
+
+        const elemento =
+            document.documentElement;
+
+
+        if (
+            !document.fullscreenElement
+        ) {
+
+            await elemento.requestFullscreen();
+
+        }
+
+        else {
+
+            await document.exitFullscreen();
+
+        }
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "No se pudo activar pantalla completa:",
+            error
+        );
+
+    }
+
+}
