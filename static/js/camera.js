@@ -6,10 +6,9 @@ const camera = document.getElementById("camera");
 const canvas = document.getElementById("canvas");
 const robotVideo = document.getElementById("robotVideo");
 
-
-// ============================================================
-// VARIABLES
-// ============================================================
+const estado = document.getElementById("estado");
+const objetoDetectado =
+    document.getElementById("objetoDetectado");
 
 let stream = null;
 
@@ -17,36 +16,34 @@ let analizando = false;
 
 let esperandoHablar = false;
 
-let objetoPendiente = null;
-
 let ultimoObjeto = null;
 
 let ultimoTiempo = 0;
-
-let vozDisponible = false;
 
 
 // ============================================================
 // INICIAR
 // ============================================================
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
 
-    iniciarCamara();
+        iniciarCamara();
 
-    cargarVoces();
+        cargarVoces();
 
-    if ("speechSynthesis" in window) {
+        if ("speechSynthesis" in window) {
 
-        window.speechSynthesis.onvoiceschanged =
-            cargarVoces;
+            window.speechSynthesis.onvoiceschanged =
+                cargarVoces;
+        }
     }
-
-});
+);
 
 
 // ============================================================
-// CARGAR VOCES
+// VOCES
 // ============================================================
 
 function cargarVoces() {
@@ -58,15 +55,10 @@ function cargarVoces() {
     const voces =
         window.speechSynthesis.getVoices();
 
-    if (voces.length > 0) {
-
-        vozDisponible = true;
-
-        console.log(
-            "Voces disponibles:",
-            voces.length
-        );
-    }
+    console.log(
+        "Voces disponibles:",
+        voces.length
+    );
 }
 
 
@@ -78,50 +70,69 @@ async function iniciarCamara() {
 
     try {
 
+        if (!navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia) {
+
+            throw new Error(
+                "Este navegador no permite acceder a la cámara."
+            );
+        }
+
         stream =
             await navigator.mediaDevices.getUserMedia({
 
                 video: {
+
                     facingMode: "user",
+
                     width: {
                         ideal: 480
                     },
+
                     height: {
                         ideal: 360
                     }
                 },
 
                 audio: false
-
             });
+
 
         camera.srcObject = stream;
 
         await camera.play();
 
+
         console.log(
             "Cámara iniciada correctamente."
         );
 
-        // Esperar a que la cámara tenga dimensiones.
+
+        actualizarEstado(
+            "Cámara activa. Observando..."
+        );
+
+
         esperarVideo();
 
-    }
 
-    catch (error) {
+    } catch (error) {
 
         console.error(
             "Error iniciando la cámara:",
             error
         );
 
-    }
 
+        actualizarEstado(
+            "No se pudo acceder a la cámara."
+        );
+    }
 }
 
 
 // ============================================================
-// ESPERAR A QUE EL VIDEO DE CÁMARA ESTÉ LISTO
+// ESPERAR A QUE LA CÁMARA TENGA IMAGEN
 // ============================================================
 
 function esperarVideo() {
@@ -138,16 +149,17 @@ function esperarVideo() {
             camera.videoHeight
         );
 
+
         iniciarCicloReconocimiento();
 
         return;
     }
 
+
     setTimeout(
         esperarVideo,
         500
     );
-
 }
 
 
@@ -165,14 +177,11 @@ async function iniciarCicloReconocimiento() {
         ) {
 
             await analizarObjeto();
-
         }
 
-        // No saturar el servidor.
-        await esperar(4000);
 
+        await esperar(3000);
     }
-
 }
 
 
@@ -182,29 +191,35 @@ async function iniciarCicloReconocimiento() {
 
 async function analizarObjeto() {
 
-    if (analizando) {
+    if (
+        analizando ||
+        esperandoHablar
+    ) {
         return;
     }
 
-    if (esperandoHablar) {
-        return;
-    }
 
     if (
         !camera.videoWidth ||
         !camera.videoHeight
     ) {
-
         return;
     }
 
+
     analizando = true;
+
 
     try {
 
-        // ====================================================
-        // PREPARAR CANVAS
-        // ====================================================
+        actualizarEstado(
+            "Analizando..."
+        );
+
+
+        // ----------------------------------------------------
+        // TAMAÑO
+        // ----------------------------------------------------
 
         const ancho =
             Math.min(
@@ -212,9 +227,11 @@ async function analizarObjeto() {
                 480
             );
 
+
         const escala =
             ancho /
             camera.videoWidth;
+
 
         const alto =
             Math.round(
@@ -222,36 +239,48 @@ async function analizarObjeto() {
                 escala
             );
 
+
         canvas.width = ancho;
 
         canvas.height = alto;
 
+
+        // ----------------------------------------------------
+        // DIBUJAR CÁMARA
+        // ----------------------------------------------------
+
         const contexto =
             canvas.getContext("2d");
 
+
         contexto.drawImage(
+
             camera,
+
             0,
             0,
+
             ancho,
             alto
         );
 
 
-        // ====================================================
-        // CONVERTIR A JPEG
-        // ====================================================
+        // ----------------------------------------------------
+        // CREAR JPEG
+        // ----------------------------------------------------
 
         const imagen =
             await new Promise(
                 resolve => {
 
                     canvas.toBlob(
+
                         resolve,
+
                         "image/jpeg",
+
                         0.65
                     );
-
                 }
             );
 
@@ -266,106 +295,144 @@ async function analizarObjeto() {
         }
 
 
-        // ====================================================
+        // ----------------------------------------------------
         // FORM DATA
-        // ====================================================
+        // ----------------------------------------------------
 
         const formData =
             new FormData();
 
+
         formData.append(
+
             "frame",
+
             imagen,
+
             "camera.jpg"
         );
 
 
-        // ====================================================
+        // ----------------------------------------------------
         // ENVIAR AL SERVIDOR
-        // ====================================================
+        // ----------------------------------------------------
 
         const respuesta =
             await fetch(
+
                 "/detectar",
+
                 {
+
                     method: "POST",
+
                     body: formData
                 }
             );
 
 
-        // ====================================================
-        // COMPROBAR RESPUESTA
-        // ====================================================
+        // ----------------------------------------------------
+        // ERROR HTTP
+        // ----------------------------------------------------
 
         if (!respuesta.ok) {
 
             const errorTexto =
                 await respuesta.text();
 
+
             console.error(
+
                 "Error /detectar:",
+
                 respuesta.status,
+
                 errorTexto
             );
+
+
+            actualizarEstado(
+                "Error de detección."
+            );
+
 
             return;
         }
 
+
+        // ----------------------------------------------------
+        // JSON
+        // ----------------------------------------------------
 
         const resultado =
             await respuesta.json();
 
 
         console.log(
-            "Detección:",
+            "Resultado:",
             resultado
         );
 
 
-        // ====================================================
-        // COMPROBAR RESULTADO
-        // ====================================================
-
         if (!resultado.success) {
 
             console.error(
-                "Error del servidor:",
                 resultado.error
+            );
+
+            actualizarEstado(
+                "Error procesando imagen."
             );
 
             return;
         }
 
 
+        // ----------------------------------------------------
+        // SIN DETECCIÓN
+        // ----------------------------------------------------
+
         if (!resultado.detected) {
+
+            actualizarEstado(
+                "Observando..."
+            );
 
             return;
         }
 
 
+        // ----------------------------------------------------
+        // OBJETO
+        // ----------------------------------------------------
+
         const objeto =
             resultado.object;
+
 
         const texto =
             resultado.text;
 
 
-        if (!objeto || !texto) {
-
+        if (
+            !objeto ||
+            !texto
+        ) {
             return;
         }
 
 
-        // ====================================================
+        // ----------------------------------------------------
         // EVITAR REPETICIONES
-        // ====================================================
+        // ----------------------------------------------------
 
         const ahora =
             Date.now();
 
+
         const mismoObjeto =
             objeto === ultimoObjeto;
+
 
         const hanPasadoDiezSegundos =
             ahora - ultimoTiempo >
@@ -389,41 +456,47 @@ async function analizarObjeto() {
         ultimoObjeto =
             objeto;
 
+
         ultimoTiempo =
             ahora;
 
 
-        // ====================================================
+        // ----------------------------------------------------
         // PROGRAMAR HABLA
-        // ====================================================
+        // ----------------------------------------------------
 
         programarHabla(
+
             objeto,
+
             texto
         );
 
-    }
 
-    catch (error) {
+    } catch (error) {
 
         console.error(
-            "Error analizando la cámara:",
+
+            "Error analizando cámara:",
+
             error
         );
 
-    }
 
-    finally {
+        actualizarEstado(
+            "Error de conexión."
+        );
+
+
+    } finally {
 
         analizando = false;
-
     }
-
 }
 
 
 // ============================================================
-// ESPERAR 5 SEGUNDOS
+// PROGRAMAR HABLA
 // ============================================================
 
 function programarHabla(
@@ -435,10 +508,18 @@ function programarHabla(
         return;
     }
 
+
     esperandoHablar = true;
 
-    objetoPendiente =
-        objeto;
+
+    mostrarObjeto(
+        objeto
+    );
+
+
+    actualizarEstado(
+        "Objeto detectado. Preparando respuesta..."
+    );
 
 
     console.log(
@@ -446,31 +527,24 @@ function programarHabla(
         objeto
     );
 
+
     console.log(
         "Esperando 5 segundos..."
     );
 
 
-    // ========================================================
-    // OPCIONAL: MOSTRAR OBJETO EN PANTALLA
-    // ========================================================
-
-    mostrarObjeto(
-        objeto
-    );
-
+    // --------------------------------------------------------
+    // ESPERAR 5 SEGUNDOS
+    // --------------------------------------------------------
 
     setTimeout(
         () => {
 
-            hablar(
-                texto
-            );
+            hablar(texto);
 
         },
         5000
     );
-
 }
 
 
@@ -482,18 +556,13 @@ function mostrarObjeto(
     objeto
 ) {
 
-    const elemento =
-        document.getElementById(
-            "objetoDetectado"
-        );
-
-    if (!elemento) {
+    if (!objetoDetectado) {
         return;
     }
 
-    elemento.textContent =
-        objeto;
 
+    objetoDetectado.textContent =
+        objeto;
 }
 
 
@@ -501,9 +570,7 @@ function mostrarObjeto(
 // HABLAR
 // ============================================================
 
-function hablar(
-    texto
-) {
+function hablar(texto) {
 
     if (
         !("speechSynthesis" in window)
@@ -513,26 +580,31 @@ function hablar(
             "El navegador no soporta texto a voz."
         );
 
+
         volverAEspera();
 
         return;
     }
 
 
-    // Cancelar cualquier voz anterior.
     window.speechSynthesis.cancel();
 
 
-    // ========================================================
+    // --------------------------------------------------------
     // CAMBIAR VIDEO
-    // ========================================================
+    // --------------------------------------------------------
 
     cambiarAVideoHablando();
 
 
-    // ========================================================
-    // CREAR MENSAJE
-    // ========================================================
+    actualizarEstado(
+        "Hablando..."
+    );
+
+
+    // --------------------------------------------------------
+    // CREAR VOZ
+    // --------------------------------------------------------
 
     const mensaje =
         new SpeechSynthesisUtterance(
@@ -543,28 +615,32 @@ function hablar(
     mensaje.lang =
         "es-ES";
 
+
     mensaje.rate =
         0.95;
 
+
     mensaje.pitch =
         1;
+
 
     mensaje.volume =
         1;
 
 
-    // ========================================================
-    // BUSCAR VOZ EN ESPAÑOL
-    // ========================================================
+    // --------------------------------------------------------
+    // BUSCAR VOZ ESPAÑOLA
+    // --------------------------------------------------------
 
     const voces =
-        window.speechSynthesis
-            .getVoices();
+        window.speechSynthesis.getVoices();
 
 
     const vozEspanol =
         voces.find(
+
             voz =>
+
                 voz.lang
                     .toLowerCase()
                     .startsWith("es")
@@ -575,13 +651,12 @@ function hablar(
 
         mensaje.voice =
             vozEspanol;
-
     }
 
 
-    // ========================================================
-    // CUANDO COMIENZA A HABLAR
-    // ========================================================
+    // --------------------------------------------------------
+    // INICIO
+    // --------------------------------------------------------
 
     mensaje.onstart =
         () => {
@@ -591,14 +666,15 @@ function hablar(
                 texto
             );
 
-            cambiarAVideoHablando();
-
+            actualizarEstado(
+                "Hablando..."
+            );
         };
 
 
-    // ========================================================
-    // CUANDO TERMINA
-    // ========================================================
+    // --------------------------------------------------------
+    // FINAL
+    // --------------------------------------------------------
 
     mensaje.onend =
         () => {
@@ -607,14 +683,14 @@ function hablar(
                 "Robot terminó de hablar."
             );
 
-            volverAEspera();
 
+            volverAEspera();
         };
 
 
-    // ========================================================
+    // --------------------------------------------------------
     // ERROR
-    // ========================================================
+    // --------------------------------------------------------
 
     mensaje.onerror =
         error => {
@@ -624,19 +700,18 @@ function hablar(
                 error
             );
 
-            volverAEspera();
 
+            volverAEspera();
         };
 
 
-    // ========================================================
+    // --------------------------------------------------------
     // HABLAR
-    // ========================================================
+    // --------------------------------------------------------
 
     window.speechSynthesis.speak(
         mensaje
     );
-
 }
 
 
@@ -682,17 +757,14 @@ function cambiarAVideoHablando() {
                     "No se pudo reproducir hablando.mp4:",
                     error
                 );
-
             }
         );
-
     }
-
 }
 
 
 // ============================================================
-// VIDEO ESPERA
+// VOLVER A ESPERA
 // ============================================================
 
 function volverAEspera() {
@@ -730,31 +802,47 @@ function volverAEspera() {
                         "No se pudo reproducir espera.mp4:",
                         error
                     );
-
                 }
             );
-
         }
-
     }
 
 
     esperandoHablar =
         false;
 
-    objetoPendiente =
-        null;
+
+    actualizarEstado(
+        "Observando..."
+    );
 
 
     console.log(
         "Robot volvió a espera."
     );
-
 }
 
 
 // ============================================================
-// FUNCIÓN ESPERA
+// ESTADO
+// ============================================================
+
+function actualizarEstado(
+    texto
+) {
+
+    if (!estado) {
+        return;
+    }
+
+
+    estado.textContent =
+        texto;
+}
+
+
+// ============================================================
+// ESPERAR
 // ============================================================
 
 function esperar(
@@ -763,12 +851,12 @@ function esperar(
 
     return new Promise(
         resolve =>
+
             setTimeout(
                 resolve,
                 milisegundos
             )
     );
-
 }
 
 
@@ -786,14 +874,11 @@ function detenerCamara() {
     stream
         .getTracks()
         .forEach(
-            track =>
-                track.stop()
+            track => track.stop()
         );
 
 
-    stream =
-        null;
-
+    stream = null;
 }
 
 
@@ -815,23 +900,17 @@ async function pantallaCompleta() {
 
             await elemento.requestFullscreen();
 
-        }
-
-        else {
+        } else {
 
             await document.exitFullscreen();
-
         }
 
-    }
 
-    catch (error) {
+    } catch (error) {
 
         console.error(
             "No se pudo activar pantalla completa:",
             error
         );
-
     }
-
 }
