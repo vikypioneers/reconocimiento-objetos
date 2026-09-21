@@ -87,6 +87,10 @@ async function analizarCamara() {
             resultado = JSON.parse(cuerpo);
         }
         if (!respuesta.ok) {
+            if (respuesta.status === 503) {
+                actualizarEstado(resultado.error || 'El reconocimiento está iniciando...');
+                return;
+            }
             throw new Error(resultado.message || resultado.error || `El servidor respondió ${respuesta.status}.`);
         }
         if (!tipoContenido.includes('application/json')) {

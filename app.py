@@ -27,6 +27,8 @@ app = Flask(__name__)
 # Se carga una sola vez y después se reutiliza.
 modelo = None
 lock_modelo = threading.Lock()
+modelo_cargando = False
+error_modelo = None
 
 
 # ============================================================
@@ -34,7 +36,7 @@ lock_modelo = threading.Lock()
 # ============================================================
 
 def obtener_modelo():
-    global modelo
+    global modelo, modelo_cargando, error_modelo
 
     # Si ya está cargado, reutilizarlo.
     if modelo is not None:
@@ -56,11 +58,27 @@ def obtener_modelo():
             from ultralytics import YOLO
 
             modelo = YOLO(ruta_modelo)
+            error_modelo = None
             app.logger.info("Modelo YOLO cargado correctamente.")
             return modelo
-        except Exception:
+        except Exception as error:
+            error_modelo = str(error)
             app.logger.exception("Error cargando el modelo YOLO.")
             raise
+
+
+def precargar_modelo():
+    global modelo_cargando
+    modelo_cargando = True
+    try:
+        obtener_modelo()
+    except Exception:
+        pass
+    finally:
+        modelo_cargando = False
+
+
+threading.Thread(target=precargar_modelo, daemon=True).start()
 
 
 # ============================================================
@@ -81,7 +99,8 @@ def health():
 
     return jsonify({
         "status": "ok",
-        "modelo_cargado": modelo is not None
+        "modelo_cargado": modelo is not None,
+        "modelo_cargando": modelo_cargando,
     })
 
 
@@ -224,7 +243,23 @@ def detectar():
         # 5. OBTENER MODELO
         # ====================================================
 
-        modelo_local = obtener_modelo()
+        if modelo is None:
+            if modelo_cargando:
+                return jsonify({
+                    "success": False,
+                    "detected": False,
+                    "error": "El modelo está iniciando. Intenta nuevamente en unos segundos."
+                }), 503
+            if error_modelo:
+                return jsonify({
+                    "success": False,
+                    "detected": False,
+                    "error": "No se pudo iniciar el modelo de reconocimiento.",
+                    "detail": error_modelo,
+                }), 503
+            modelo_local = obtener_modelo()
+        else:
+            modelo_local = modelo
 
         # ====================================================
         # 6. EJECUTAR YOLO
