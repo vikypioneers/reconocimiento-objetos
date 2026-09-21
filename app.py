@@ -29,6 +29,8 @@ modelo = None
 lock_modelo = threading.Lock()
 modelo_cargando = False
 error_modelo = None
+modelo_listo = threading.Event()
+inicio_carga_modelo = None
 
 
 # ============================================================
@@ -36,7 +38,7 @@ error_modelo = None
 # ============================================================
 
 def obtener_modelo():
-    global modelo, modelo_cargando, error_modelo
+    global modelo, modelo_cargando, error_modelo, inicio_carga_modelo
 
     # Si ya está cargado, reutilizarlo.
     if modelo is not None:
@@ -53,16 +55,19 @@ def obtener_modelo():
                 f"No se encontró el modelo YOLO en: {ruta_modelo}"
             )
 
+        inicio_carga_modelo = time.time()
         app.logger.info("Cargando modelo YOLO desde: %s", ruta_modelo)
         try:
             from ultralytics import YOLO
 
             modelo = YOLO(ruta_modelo)
             error_modelo = None
+            modelo_listo.set()
             app.logger.info("Modelo YOLO cargado correctamente.")
             return modelo
         except Exception as error:
             error_modelo = str(error)
+            modelo_listo.set()
             app.logger.exception("Error cargando el modelo YOLO.")
             raise
 
@@ -101,6 +106,8 @@ def health():
         "status": "ok",
         "modelo_cargado": modelo is not None,
         "modelo_cargando": modelo_cargando,
+        "modelo_error": error_modelo,
+        "segundos_cargando": round(time.time() - inicio_carga_modelo, 1) if inicio_carga_modelo else 0,
     })
 
 
@@ -245,10 +252,12 @@ def detectar():
 
         if modelo is None:
             if modelo_cargando:
+                modelo_listo.wait(timeout=20)
+            if modelo is None and modelo_cargando:
                 return jsonify({
                     "success": False,
                     "detected": False,
-                    "error": "El modelo está iniciando. Intenta nuevamente en unos segundos."
+                    "error": "El modelo sigue iniciando. Intenta nuevamente en unos segundos."
                 }), 503
             if error_modelo:
                 return jsonify({
