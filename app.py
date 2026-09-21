@@ -13,7 +13,6 @@ from flask import (
     send_from_directory
 )
 
-from ultralytics import YOLO
 
 
 # ============================================================
@@ -54,6 +53,8 @@ def obtener_modelo():
 
         app.logger.info("Cargando modelo YOLO desde: %s", ruta_modelo)
         try:
+            from ultralytics import YOLO
+
             modelo = YOLO(ruta_modelo)
             app.logger.info("Modelo YOLO cargado correctamente.")
             return modelo
