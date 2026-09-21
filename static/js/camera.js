@@ -1,6 +1,7 @@
-// ============================================================
-// RECONOCIMIENTO DE OBJETOS - MR.MIND
-// ============================================================
+const camara = document.getElementById('camara');
+const captura = document.getElementById('captura');
+const videoRobot = document.getElementById('video-robot');
+const estado = document.getElementById('estado');
 
 const VIDEO_ESPERA = '/videos/espera.mp4';
 const VIDEO_HABLANDO = '/videos/hablando.mp4';
@@ -9,31 +10,6 @@ let analisisEnCurso = false;
 let ultimoTexto = '';
 let textoPendiente = '';
 let vozHabilitada = false;
-
-const estado = document.getElementById("estado");
-const objetoDetectado =
-    document.getElementById("objetoDetectado");
-
-let stream = null;
-
-let analizando = false;
-
-    if (!vozHabilitada) {
-        textoPendiente = texto;
-        actualizarEstado('Toca la pantalla para activar la voz.');
-        return;
-    }
-
-    ultimoTexto = texto;
-    window.speechSynthesis.cancel();
-    const voz = new SpeechSynthesisUtterance(texto);
-    voz.lang = 'es-ES';
-    voz.rate = 0.95;
-    voz.onstart = () => cambiarVideoRobot(true);
-    voz.onend = () => cambiarVideoRobot(false);
-    voz.onerror = () => cambiarVideoRobot(false);
-    window.speechSynthesis.speak(voz);
-}
 
 function habilitarVoz() {
     vozHabilitada = true;
