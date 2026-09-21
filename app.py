@@ -61,6 +61,7 @@ def obtener_modelo():
             app.logger.exception("Error cargando el modelo YOLO.")
             raise
 
+def obtener_modelo():
 
 # ============================================================
 # PÁGINA PRINCIPAL
@@ -70,6 +71,8 @@ def obtener_modelo():
 def index():
     return send_from_directory(BASE_DIR, "index.html")
 
+    if modelo is not None:
+        return modelo
 
 # ============================================================
 # HEALTH CHECK

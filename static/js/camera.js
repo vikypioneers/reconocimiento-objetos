@@ -1,7 +1,6 @@
-const camara = document.getElementById('camara');
-const captura = document.getElementById('captura');
-const videoRobot = document.getElementById('video-robot');
-const estado = document.getElementById('estado');
+// ============================================================
+// RECONOCIMIENTO DE OBJETOS - MR.MIND
+// ============================================================
 
 const VIDEO_ESPERA = '/videos/espera.mp4';
 const VIDEO_HABLANDO = '/videos/hablando.mp4';
@@ -11,22 +10,13 @@ let ultimoTexto = '';
 let textoPendiente = '';
 let vozHabilitada = false;
 
-function actualizarEstado(texto, error = false) {
-    estado.textContent = texto;
-    estado.classList.toggle('error', error);
-}
+const estado = document.getElementById("estado");
+const objetoDetectado =
+    document.getElementById("objetoDetectado");
 
-function cambiarVideoRobot(hablando) {
-    const videoNuevo = hablando ? VIDEO_HABLANDO : VIDEO_ESPERA;
-    if (!videoRobot.src.endsWith(videoNuevo)) {
-        videoRobot.src = videoNuevo;
-        videoRobot.load();
-    }
-    videoRobot.play().catch(() => {});
-}
+let stream = null;
 
-function hablar(texto) {
-    if (!texto || texto === ultimoTexto || !('speechSynthesis' in window)) return;
+let analizando = false;
 
     if (!vozHabilitada) {
         textoPendiente = texto;
@@ -107,10 +97,8 @@ async function analizarCamara() {
     } finally {
         analisisEnCurso = false;
     }
-}
+);
 
-async function iniciarPrograma() {
-    cambiarVideoRobot(false);
 
     if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
         actualizarEstado('La cámara necesita una conexión HTTPS.', true);
@@ -122,6 +110,22 @@ async function iniciarPrograma() {
         console.error('Este navegador no permite acceder a la cámara.');
         return;
     }
+
+    const voces =
+        window.speechSynthesis.getVoices();
+
+    console.log(
+        "Voces disponibles:",
+        voces.length
+    );
+}
+
+
+// ============================================================
+// INICIAR CÁMARA
+// ============================================================
+
+async function iniciarCamara() {
 
     try {
         flujoCamara = await navigator.mediaDevices.getUserMedia({
@@ -138,8 +142,16 @@ async function iniciarPrograma() {
         camara.addEventListener('loadeddata', analizarCamara, { once: true });
         window.setInterval(analizarCamara, 5000);
     } catch (error) {
-        actualizarEstado('Permiso de cámara denegado o cámara no disponible.', true);
-        console.error('No se pudo acceder a la cámara:', error);
+
+        console.error(
+            "Error iniciando la cámara:",
+            error
+        );
+
+
+        actualizarEstado(
+            "No se pudo acceder a la cámara."
+        );
     }
 }
 
