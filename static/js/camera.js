@@ -87,8 +87,10 @@ async function analizarCamara() {
             resultado = JSON.parse(cuerpo);
         }
         if (!respuesta.ok) {
-            if (respuesta.status === 503) {
-                actualizarEstado(resultado.error || 'El reconocimiento está iniciando...');
+            if (respuesta.status === 502 || respuesta.status === 503) {
+                actualizarEstado(
+                    resultado.error || 'El servidor está iniciando. Reintentando...'
+                );
                 return;
             }
             throw new Error(resultado.message || resultado.error || `El servidor respondió ${respuesta.status}.`);
@@ -103,11 +105,14 @@ async function analizarCamara() {
             actualizarEstado('Cámara activa. Buscando un objeto...');
         }
     } catch (error) {
+        const temporal = error.name === 'AbortError' || error.message.includes('servidor respondió 502');
         const mensaje = error.name === 'AbortError'
-            ? 'El servidor tardó demasiado en responder.'
+            ? 'El servidor está tardando. Reintentando...'
             : error.message || 'No se pudo analizar la imagen.';
-        actualizarEstado(mensaje, true);
-        console.error('Error analizando la cámara:', error);
+        actualizarEstado(mensaje, !temporal);
+        if (!temporal) {
+            console.error('Error analizando la cámara:', error);
+        }
     } finally {
         analisisEnCurso = false;
     }
