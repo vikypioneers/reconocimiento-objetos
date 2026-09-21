@@ -11,6 +11,40 @@ let ultimoTexto = '';
 let textoPendiente = '';
 let vozHabilitada = false;
 
+function actualizarEstado(texto, error = false) {
+    estado.textContent = texto;
+    estado.classList.toggle('error', error);
+}
+
+function cambiarVideoRobot(hablando) {
+    const videoNuevo = hablando ? VIDEO_HABLANDO : VIDEO_ESPERA;
+    if (!videoRobot.src.endsWith(videoNuevo)) {
+        videoRobot.src = videoNuevo;
+        videoRobot.load();
+    }
+    videoRobot.play().catch(() => {});
+}
+
+function hablar(texto) {
+    if (!texto || texto === ultimoTexto || !('speechSynthesis' in window)) return;
+
+    if (!vozHabilitada) {
+        textoPendiente = texto;
+        actualizarEstado('Toca la pantalla para activar la voz.');
+        return;
+    }
+
+    ultimoTexto = texto;
+    window.speechSynthesis.cancel();
+    const voz = new SpeechSynthesisUtterance(texto);
+    voz.lang = 'es-ES';
+    voz.rate = 0.95;
+    voz.onstart = () => cambiarVideoRobot(true);
+    voz.onend = () => cambiarVideoRobot(false);
+    voz.onerror = () => cambiarVideoRobot(false);
+    window.speechSynthesis.speak(voz);
+}
+
 function habilitarVoz() {
     vozHabilitada = true;
     if (textoPendiente) {
@@ -53,12 +87,12 @@ async function analizarCamara() {
             resultado = JSON.parse(cuerpo);
         }
         if (!respuesta.ok) {
-            throw new Error(resultado.message || `El servidor respondió ${respuesta.status}.`);
+            throw new Error(resultado.message || resultado.error || `El servidor respondió ${respuesta.status}.`);
         }
         if (!tipoContenido.includes('application/json')) {
             throw new Error('El servidor devolvió una respuesta no válida.');
         }
-        if (resultado.success) {
+        if (resultado.success && resultado.text) {
             actualizarEstado(`Detectado: ${resultado.object} (${Math.round(resultado.confidence * 100)}%)`);
             hablar(resultado.text);
         } else {
@@ -73,8 +107,10 @@ async function analizarCamara() {
     } finally {
         analisisEnCurso = false;
     }
-);
+}
 
+async function iniciarPrograma() {
+    cambiarVideoRobot(false);
 
     if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
         actualizarEstado('La cámara necesita una conexión HTTPS.', true);
@@ -83,25 +119,8 @@ async function analizarCamara() {
 
     if (!navigator.mediaDevices?.getUserMedia) {
         actualizarEstado('Este navegador no permite usar la cámara.', true);
-        console.error('Este navegador no permite acceder a la cámara.');
         return;
     }
-
-    const voces =
-        window.speechSynthesis.getVoices();
-
-    console.log(
-        "Voces disponibles:",
-        voces.length
-    );
-}
-
-
-// ============================================================
-// INICIAR CÁMARA
-// ============================================================
-
-async function iniciarCamara() {
 
     try {
         flujoCamara = await navigator.mediaDevices.getUserMedia({
@@ -118,16 +137,8 @@ async function iniciarCamara() {
         camara.addEventListener('loadeddata', analizarCamara, { once: true });
         window.setInterval(analizarCamara, 5000);
     } catch (error) {
-
-        console.error(
-            "Error iniciando la cámara:",
-            error
-        );
-
-
-        actualizarEstado(
-            "No se pudo acceder a la cámara."
-        );
+        actualizarEstado('Permiso de cámara denegado o cámara no disponible.', true);
+        console.error('No se pudo acceder a la cámara:', error);
     }
 }
 
