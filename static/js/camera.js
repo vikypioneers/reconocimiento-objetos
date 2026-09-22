@@ -89,7 +89,8 @@ async function analizarCamara() {
         if (!respuesta.ok) {
             if (respuesta.status === 502 || respuesta.status === 503) {
                 actualizarEstado(
-                    resultado.error || 'El servidor está iniciando. Reintentando...'
+                    resultado.error || 'El servidor está iniciando. Reintentando...',
+                    resultado.status === 'error'
                 );
                 return;
             }
